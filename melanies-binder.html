@@ -125,6 +125,8 @@
     opacity:0; transition:opacity 0.2s;
   }
   #cover:hover #coverBtns{ opacity:1; }
+  /* On touch screens there is no hover, so always show the buttons */
+  @media (hover: none){ #coverBtns{ opacity:1; } }
   #coverBtns button{
     background:rgba(0,0,0,0.6); color:#fff;
     border:1.5px solid rgba(255,255,255,0.3);
