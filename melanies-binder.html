@@ -5,6 +5,45 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Melanie's Binder</title>
 
+<!-- iOS "Add to Home Screen" tags -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Melanie's Binder">
+
+<script>
+/* Generate the home-screen icon using canvas — purple galaxy theme for Melanie. */
+(function(){
+  var c = document.createElement('canvas');
+  c.width = c.height = 180;
+  var x = c.getContext('2d');
+  x.beginPath();
+  if (x.roundRect) x.roundRect(0, 0, 180, 180, 28);
+  else x.rect(0, 0, 180, 180);
+  x.clip();
+  /* Purple gradient — mirrors Melanie's cover */
+  var g = x.createRadialGradient(54, 32, 0, 90, 90, 160);
+  g.addColorStop(0,    '#f5e6ff');
+  g.addColorStop(0.14, '#c87dff');
+  g.addColorStop(0.4,  '#8830e8');
+  g.addColorStop(0.65, '#4a0fa8');
+  g.addColorStop(1,    '#0a0030');
+  x.fillStyle = g;
+  x.fillRect(0, 0, 180, 180);
+  /* Bold "M" initial */
+  x.fillStyle = 'rgba(255,255,255,0.92)';
+  x.font = 'bold 82px Georgia,serif';
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  x.shadowColor = 'rgba(20,0,60,0.6)';
+  x.shadowBlur  = 8;
+  x.fillText('M', 90, 96);
+  var l = document.createElement('link');
+  l.rel  = 'apple-touch-icon';
+  l.href = c.toDataURL('image/png');
+  document.head.appendChild(l);
+})();
+</script>
+
 <!-- Firebase SDK (CDN, compat build for simplicity in a single file) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
