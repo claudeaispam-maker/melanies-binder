@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loui's Binder — Shared View</title>
+  <style>
+    /* ── Reset & base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1208;
+      color: #eee;
+      min-height: 100vh;
+    }
+
+    /* ── CSS variables matching the main binder app ── */
+    :root {
+      --leather:      #6b4c2a;
+      --leather-dark: #3d2910;
+      --page:         #faf6ef;
+      --page-edge:    #d4c9b8;
+      --pocket:       rgba(255,255,255,0.35);
+      --pocket-border:#bfb09a;
+      --owned:        #3a9d4f;
+      --missing:      #cc4444;
+    }
+
+    /* ── Loading / error states ── */
+    #loadingView, #errorView {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 100vh; gap: 16px;
+      color: rgba(255,255,255,0.5); text-align: center; padding: 24px;
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid rgba(255,255,255,0.15);
+      border-top-color: #e8a020;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #errorView h2 { color: #e88; font-size: 20px; }
+    #errorView p  { font-size: 14px; }
+
+    /* ── Main viewer shell ── */
+    #viewerShell { display: none; flex-direction: column; min-height: 100vh; }
+
+    /* ── Header bar ── */
+    #viewerHeader {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px;
+      background: rgba(0,0,0,0.45);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      position: sticky; top: 0; z-index: 10;
+    }
+    #viewerTitle {
+      font-family: Georgia, serif;
+      font-size: clamp(15px, 3vw, 20px);
+      font-weight: 700;
+      color: #f0d080;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    }
+    #viewerMeta {
+      font-size: 11px; color: rgba(255,255,255,0.38);
+    }
+    #viewerBadge {
+      font-size: 11px; color: rgba(255,255,255,0.45);
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px; padding: 3px 10px;
+    }
+
+    /* ── Cover section ── */
+    #coverSection {
+      display: flex; justify-content: center; padding: 32px 16px 20px;
+    }
+    #viewerCover {
+      width: min(74vw, 340px);
+      aspect-ratio: 3/4;
+      border-radius: 12px;
+      border: 8px solid #111;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+      /* default Charizard fire gradient — replaced by photo if one was shared */
+      background: radial-gradient(circle at 30% 18%,
+        #fff6b0 0%, #ffd23f 14%, #ff9a1f 34%,
+        #ff5b1f 56%, #e8290c 76%, #a8120a 100%);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    #viewerCover img.cover-photo {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover; object-position: center;
+    }
+    #viewerCover .cover-overlay {
+      position: absolute; inset: 0;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.5) 100%);
+    }
+    #viewerCover h1 {
+      position: relative; z-index: 2;
+      color: #fff;
+      font-family: Georgia, serif;
+      font-weight: 900;
+      font-size: clamp(20px, 5vw, 30px);
+      text-align: center;
+      text-shadow: 0 2px 0 #7a1505, 0 4px 10px rgba(0,0,0,0.7);
+      -webkit-text-stroke: 1px #5c1004;
+      letter-spacing: 1px;
+      padding: 0 12px;
+    }
+
+    /* ── Summary bar ── */
+    #summaryBar {
+      display: flex; gap: 20px; justify-content: center;
+      padding: 0 16px 24px;
+      font-size: 13px; color: rgba(255,255,255,0.65);
+    }
+    .sumDot {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block; margin-right: 5px; vertical-align: middle;
+    }
+    .sumDot.owned   { background: var(--owned); }
+    .sumDot.missing { background: var(--missing); }
+
+    /* ── Page navigation ── */
+    #pageNav {
+      display: flex; align-items: center; justify-content: center;
+      gap: 12px; padding: 0 16px 16px;
+    }
+    .navBtn {
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(255,255,255,0.12); color: #fff;
+      border: none; font-size: 18px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+    }
+    .navBtn:hover:not(:disabled) { background: rgba(255,255,255,0.25); }
+    .navBtn:disabled { opacity: 0.25; cursor: default; }
+    #pageLabel {
+      font-size: 13px; color: rgba(255,255,255,0.55);
+      min-width: 100px; text-align: center;
+    }
+
+    /* ── Binder page ── */
+    #pageSection {
+      display: flex; justify-content: center;
+      padding: 0 16px 40px;
+    }
+    #pageWrap {
+      width: min(94vw, 480px);
+      background: linear-gradient(135deg, var(--leather) 0%, var(--leather-dark) 100%);
+      border-radius: 8px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+      padding: 12px;
+    }
+    .pageHeader {
+      text-align: center;
+      font-family: Georgia, serif;
+      color: #d4c9b8;
+      font-size: 12px;
+      padding: 4px 0 8px;
+      opacity: 0.75;
+    }
+    /* 3×3 grid matching the main app */
+    .grid3x3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .pocket {
+      background: var(--pocket);
+      border: 2px dashed var(--pocket-border);
+      border-radius: 6px;
+      position: relative;
+      overflow: hidden;
+      aspect-ratio: 2/3;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .pocket.filled { border-style: solid; background: rgba(255,255,255,0.55); }
+    .pocket.missing { opacity: 0.75; }
+    /* Greyscale filter for missing cards, matching the binder app */
+    .pocket.missing img { filter: grayscale(0.9) brightness(0.75); opacity: 0.7; }
+    .pocket img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
+    .pocket .emptyPlus { font-size: 22px; color: rgba(80,60,40,0.3); }
+
+    /* Owned/missing status dot — top-left corner */
+    .ownedDot {
+      position: absolute; top: 4px; left: 4px;
+      width: 9px; height: 9px; border-radius: 50%;
+      box-shadow: 0 0 0 1.5px rgba(255,255,255,0.8);
+    }
+    .ownedDot.owned   { background: var(--owned); }
+    .ownedDot.missing { background: var(--missing); }
+
+    /* Quantity badge — top-right corner */
+    .qtyBadge {
+      position: absolute; top: 4px; right: 4px;
+      background: rgba(0,0,0,0.6); color: #fff;
+      font-size: 10px; padding: 1px 5px; border-radius: 8px;
+    }
+
+    /* Price badge — bottom strip */
+    .priceBadge {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.68); color: #ffe066;
+      font-size: 10px; font-weight: 700; text-align: center;
+      padding: 2px; border-radius: 0 0 4px 4px;
+    }
+
+    /* ── Page dots strip (quick jump) ── */
+    #pageDots {
+      display: flex; justify-content: center; flex-wrap: wrap;
+      gap: 6px; padding: 0 16px 32px;
+    }
+    .pageDot {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      border: 1.5px solid rgba(255,255,255,0.2);
+      font-size: 10px; color: rgba(255,255,255,0.5);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+    }
+    .pageDot:hover   { background: rgba(255,255,255,0.22); }
+    .pageDot.current { background: var(--leather); border-color: var(--leather); color: #fff; }
+
+    /* ── Footer ── */
+    #viewerFooter {
+      text-align: center; padding: 20px;
+      font-size: 11px; color: rgba(255,255,255,0.22);
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Shown while decompressing the URL hash -->
+<div id="loadingView">
+  <div class="spinner"></div>
+  <p>Loading collection…</p>
+</div>
+
+<!-- Shown if the link is invalid or decompression fails -->
+<div id="errorView" style="display:none">
+  <h2>Could not load binder</h2>
+  <p id="errorMsg">The share link may be invalid or expired.</p>
+</div>
+
+<!-- Main viewer — shown after successful decode -->
+<div id="viewerShell">
+  <div id="viewerHeader">
+    <span id="viewerTitle">Loui's Binder</span>
+    <span id="viewerBadge">👁 View only</span>
+  </div>
+
+  <div id="coverSection">
+    <div id="viewerCover">
+      <!-- Cover photo or gradient filled by JS -->
+      <h1 id="coverTitle">Loui's Binder</h1>
+    </div>
+  </div>
+
+  <div id="summaryBar"></div>
+
+  <div id="pageNav">
+    <button class="navBtn" id="prevPageBtn" disabled>‹</button>
+    <span id="pageLabel">Page 1 of 1</span>
+    <button class="navBtn" id="nextPageBtn" disabled>›</button>
+  </div>
+
+  <div id="pageSection">
+    <div id="pageWrap">
+      <div class="pageHeader" id="pageHeaderLabel">— Page 1 —</div>
+      <div class="grid3x3" id="cardGrid"></div>
+    </div>
+  </div>
+
+  <div id="pageDots"></div>
+
+  <div id="viewerFooter">
+    Shared from <strong>Loui's Binder</strong> · Read only
+  </div>
+</div>
+
+<script>
+/* ── Decompress the URL hash back into a JS object ── */
+async function decompressAndDecode(b64){
+  // Reverse of compressAndEncode in louis-binder.html
+  const binary = atob(b64);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const stream = new DecompressionStream('gzip');
+  const writer = stream.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  return JSON.parse(await new Response(stream.readable).text());
+}
+
+/* ── State ── */
+let data        = null; // decoded share payload
+let currentPage = 0;   // zero-based page index
+
+/* ── Entry point ── */
+async function init(){
+  const hash = location.hash.slice(1); // strip the leading '#'
+  if (!hash){
+    showError('No share data found in this URL.');
+    return;
+  }
+  try {
+    data = await decompressAndDecode(hash);
+    if (!data || !Array.isArray(data.pages)) throw new Error('Invalid payload shape');
+    renderViewer();
+  } catch(e){
+    showError('The link appears to be corrupted or from an older version. (' + e.message + ')');
+  }
+}
+
+function showError(msg){
+  document.getElementById('loadingView').style.display = 'none';
+  document.getElementById('errorView').style.display   = 'flex';
+  document.getElementById('errorMsg').textContent      = msg;
+}
+
+/* ── Build the full viewer after decode ── */
+function renderViewer(){
+  document.getElementById('loadingView').style.display  = 'none';
+  document.getElementById('viewerShell').style.display  = 'flex';
+
+  // Cover title
+  const title = data.title || "Loui's Binder";
+  document.title = title + ' — Shared View';
+  document.getElementById('viewerTitle').textContent  = title;
+  document.getElementById('coverTitle').textContent   = title;
+
+  // Custom cover photo (if it fit in the URL)
+  if (data.coverImage){
+    const cover  = document.getElementById('viewerCover');
+    const img    = document.createElement('img');
+    img.className = 'cover-photo';
+    img.src       = data.coverImage;
+    img.alt       = 'Cover';
+    const overlay = document.createElement('div');
+    overlay.className = 'cover-overlay';
+    cover.prepend(overlay);
+    cover.prepend(img);
+  }
+
+  // Summary counts
+  let owned = 0, missing = 0, total = 0;
+  data.pages.forEach(page => page.forEach(slot => {
+    if (slot){ total++; slot.owned ? owned++ : missing++; }
+  }));
+  document.getElementById('summaryBar').innerHTML =
+    `<span><span class="sumDot owned"></span>${owned} owned</span>` +
+    `<span><span class="sumDot missing"></span>${missing} missing</span>` +
+    `<span style="color:rgba(255,255,255,0.3)">${total} cards · ${data.pages.length} pages</span>`;
+
+  // Build page dot navigation
+  const dotsEl = document.getElementById('pageDots');
+  data.pages.forEach((_, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'pageDot' + (i === 0 ? ' current' : '');
+    dot.textContent = i + 1;
+    dot.addEventListener('click', () => goToPage(i));
+    dotsEl.appendChild(dot);
+  });
+
+  // Prev / next buttons
+  document.getElementById('prevPageBtn').addEventListener('click', () => goToPage(currentPage - 1));
+  document.getElementById('nextPageBtn').addEventListener('click', () => goToPage(currentPage + 1));
+
+  goToPage(0); // render first page
+}
+
+/* ── Navigate to a page and re-render the grid ── */
+function goToPage(idx){
+  if (!data || idx < 0 || idx >= data.pages.length) return;
+  currentPage = idx;
+
+  // Update page label
+  document.getElementById('pageLabel').textContent =
+    `Page ${idx + 1} of ${data.pages.length}`;
+  document.getElementById('pageHeaderLabel').textContent = `— Page ${idx + 1} —`;
+
+  // Update nav button states
+  document.getElementById('prevPageBtn').disabled = idx <= 0;
+  document.getElementById('nextPageBtn').disabled = idx >= data.pages.length - 1;
+
+  // Highlight active page dot
+  document.querySelectorAll('.pageDot').forEach((dot, i) =>
+    dot.classList.toggle('current', i === idx)
+  );
+
+  // Build 9-slot grid
+  const grid = document.getElementById('cardGrid');
+  grid.innerHTML = '';
+  const page = data.pages[idx] || [];
+
+  for (let s = 0; s < 9; s++){
+    const slot   = page[s] || null;
+    const pocket = document.createElement('div');
+    pocket.className = 'pocket' + (slot ? ' filled' : '') + (slot && !slot.owned ? ' missing' : '');
+
+    if (slot){
+      // Card image
+      const img = document.createElement('img');
+      img.src     = slot.image;
+      img.alt     = slot.name;
+      img.loading = 'lazy';
+      pocket.appendChild(img);
+
+      // Owned/missing status dot
+      const dot = document.createElement('div');
+      dot.className = 'ownedDot ' + (slot.owned ? 'owned' : 'missing');
+      pocket.appendChild(dot);
+
+      // Quantity badge (only when > 1)
+      if (slot.quantity && slot.quantity > 1){
+        const qty = document.createElement('div');
+        qty.className   = 'qtyBadge';
+        qty.textContent = 'x' + slot.quantity;
+        pocket.appendChild(qty);
+      }
+
+      // Price badge
+      if (slot.price != null){
+        const price = document.createElement('div');
+        price.className   = 'priceBadge';
+        price.textContent = '$' + Number(slot.price).toFixed(2);
+        pocket.appendChild(price);
+      }
+    } else {
+      // Empty slot
+      const plus = document.createElement('div');
+      plus.className   = 'emptyPlus';
+      plus.textContent = '·';
+      pocket.appendChild(plus);
+    }
+    grid.appendChild(pocket);
+  }
+}
+
+// Start
+init();
+</script>
+</body>
+</html>

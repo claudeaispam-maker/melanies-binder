@@ -1,0 +1,2351 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Melanie's Binder</title>
+
+<!-- Firebase SDK (CDN, compat build for simplicity in a single file) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<style>
+  :root{
+    --leather: #6b3a2a;
+    --leather-dark: #4a2719;
+    --gold: #d4af37;
+    --page: #f4ecd8;
+    --page-edge: #d8c9a3;
+    --pocket: rgba(255,255,255,0.35);
+    --pocket-border: rgba(255,255,255,0.6);
+    --owned: #3a9d4f;
+    --missing: #a3a3a3;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; width:100%;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: radial-gradient(ellipse at center, #2b2b2b 0%, #111 100%);
+    overflow:hidden;
+    color:#222;
+    -webkit-tap-highlight-color: transparent;
+    user-select:none;
+  }
+
+  /* ---------------- COVER ---------------- */
+  #coverStage{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    perspective: 2000px; z-index: 50;
+  }
+  #cover{
+    width:min(86vw, 480px); height:min(70vh, 640px);
+    background:
+      radial-gradient(circle at 30% 18%, #f5e6ff 0%, #c87dff 14%, #8830e8 34%, #4a0fa8 56%, #250570 76%, #0a0030 100%);
+    border-radius: 14px;
+    box-shadow: 0 30px 60px rgba(0,0,0,0.65), inset 0 0 50px rgba(0,0,0,0.35);
+    display:flex; align-items:center; justify-content:center; flex-direction:column;
+    cursor:pointer;
+    transform-origin: left center;
+    transform-style: preserve-3d;
+    transition: transform 1.1s cubic-bezier(.6,0,.4,1);
+    border: 10px solid #111;
+    position:relative;
+    overflow:hidden;
+  }
+  /* zipper piping around the edge, like a zip-up card binder */
+  #cover::before{
+    content:'';
+    position:absolute; inset:8px;
+    border: 3px solid rgba(0,0,0,0.55);
+    border-radius:8px;
+    pointer-events:none;
+    background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0,0,0,0.18) 6px 7px);
+  }
+  /* deep-shadow vignette and soft star-glow to complement the galaxy gradient */
+  #cover::after{
+    content:'';
+    position:absolute; inset:0;
+    background:
+      radial-gradient(ellipse 70% 45% at 75% 85%, rgba(10,5,30,0.65) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 15% 90%, rgba(10,5,30,0.6) 0%, transparent 55%),
+      radial-gradient(ellipse 50% 60% at 85% 10%, rgba(200,150,255,0.3) 0%, transparent 50%);
+    pointer-events:none;
+  }
+  #cover.opened{
+    transform: rotateY(-150deg);
+    box-shadow: 0 30px 60px rgba(0,0,0,0.2);
+  }
+  #cover h1{
+    color: #fff;
+    font-family: 'Georgia', serif;
+    font-weight: 900;
+    font-size: clamp(28px,6vw,42px);
+    text-align:center;
+    text-shadow: 0 2px 0 #2a006b, 0 4px 10px rgba(0,0,0,0.7), 0 0 24px rgba(180,100,255,0.75);
+    -webkit-text-stroke: 1.5px #1a0050;
+    margin:0 0 10px 0;
+    letter-spacing:1px;
+    position:relative; z-index:2;
+  }
+  #cover .firemark{
+    width:84px; height:84px;
+    margin-bottom: 16px;
+    position:relative; z-index:2;
+    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.5));
+  }
+  #cover .tap-prompt{
+    color: rgba(255,255,255,0.9);
+    font-size: 14px;
+    margin-top: 14px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    position:relative; z-index:2;
+    animation: pulse 2s infinite ease-in-out;
+  }
+  @keyframes pulse{ 0%,100%{opacity:0.5;} 50%{opacity:1;} }
+
+  #coverStage.hide{ display:none; }
+
+  #coverImg{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover; object-position:center;
+    border-radius:4px;
+    z-index:1; display:none;
+  }
+  #cover.custom-cover #coverImg{ display:block; }
+  #cover.custom-cover::before{ display:none; }
+  #cover.custom-cover::after{
+    background: linear-gradient(to bottom, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.55) 100%);
+  }
+  #cover.custom-cover{ background:#111; }
+
+  #coverBtns{
+    position:absolute; bottom:14px; right:14px;
+    z-index:10; display:flex; gap:6px;
+    opacity:0; transition:opacity 0.2s;
+  }
+  #cover:hover #coverBtns{ opacity:1; }
+  #coverBtns button{
+    background:rgba(0,0,0,0.6); color:#fff;
+    border:1.5px solid rgba(255,255,255,0.3);
+    border-radius:16px; padding:5px 11px;
+    font-size:12px; cursor:pointer;
+  }
+  #coverBtns button:hover{ background:rgba(0,0,0,0.85); }
+
+  /* ---------------- BINDER APP ---------------- */
+  #app{
+    position:fixed; inset:0; display:none;
+    flex-direction:column; align-items:center; justify-content:center;
+    opacity:0; transition: opacity .6s ease;
+  }
+  #app.visible{ display:flex; opacity:1; }
+
+  #topBar{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 10px 16px;
+    color:#eee; font-size:13px;
+    z-index: 30;
+  }
+  #topBar .summary{
+    background: rgba(0,0,0,0.4);
+    padding: 6px 12px; border-radius: 20px;
+    display:flex; gap:10px; align-items:center;
+  }
+  #topBar .dot{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px;}
+  #topBar .dot.owned{ background:var(--owned); }
+  #topBar .dot.missing{ background:var(--missing); }
+  #settingsBtn{
+    background: rgba(0,0,0,0.4); border:none; color:#eee; border-radius:20px;
+    padding:6px 12px; cursor:pointer; font-size:13px;
+  }
+  #settingsBtn:hover{ background: rgba(0,0,0,0.6); }
+
+  #binderWrap{
+    perspective: 2400px;
+    width: min(94vw, 920px);
+    height: min(80vh, 600px);
+    position:relative;
+  }
+  #binder{
+    width:100%; height:100%;
+    background: linear-gradient(135deg, var(--leather) 0%, var(--leather-dark) 100%);
+    border-radius: 8px;
+    box-shadow: 0 30px 70px rgba(0,0,0,0.6);
+    position:relative;
+    display:flex;
+    padding: 14px;
+    gap: 4px;
+  }
+
+  .pageSlotHolder{
+    position:relative;
+    flex:1;
+    background: var(--page);
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px var(--page-edge);
+    overflow:hidden;
+  }
+  .pageFace{
+    position:absolute; inset:0;
+    backface-visibility: hidden;
+    display:flex; flex-direction:column;
+    transform-origin: left center;
+    transition: transform .85s cubic-bezier(.6,.02,.3,1);
+  }
+  .pageFace.right{ transform-origin: left center; }
+  .pageFace.left{ transform-origin: right center; }
+
+  .pageHeader{
+    text-align:center; font-family:Georgia, serif; color: var(--leather-dark);
+    font-size:13px; padding:8px 0 2px 0; opacity:0.7; flex-shrink:0;
+  }
+  .grid3x3{
+    flex:1;
+    display:grid;
+    grid-template-columns: repeat(3,1fr);
+    grid-template-rows: repeat(3,1fr);
+    gap: 8px;
+    padding: 10px;
+  }
+  .pocket{
+    background: var(--pocket);
+    border: 2px dashed var(--pocket-border);
+    border-radius: 6px;
+    position:relative;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    overflow:hidden;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .pocket:hover{ transform: scale(1.03); box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
+  .pocket.filled{ border-style: solid; background: rgba(255,255,255,0.55); }
+  .pocket .plus{
+    font-size: 26px; color: rgba(80,60,40,0.35); font-weight:300;
+  }
+  .pocket img{
+    width:100%; height:100%; object-fit:contain; padding:3px;
+    filter: none;
+    transition: filter .3s ease;
+  }
+  .pocket.missing img{
+    filter: grayscale(0.9) brightness(0.75) contrast(0.85);
+    opacity: 0.65;
+  }
+  .pocket .qtyBadge{
+    position:absolute; top:4px; right:4px;
+    background: rgba(0,0,0,0.6); color:#fff; font-size:10px;
+    padding:1px 5px; border-radius:8px;
+  }
+  .pocket .priceBadge{
+    position:absolute; bottom:0; left:0; right:0;
+    background: rgba(0,0,0,0.68); color:#ffe066;
+    font-size:10px; font-weight:700; text-align:center;
+    padding:2px 2px; letter-spacing:0.3px;
+    border-radius:0 0 4px 4px;
+  }
+  .pocket .priceBadge.loading{ color:rgba(255,224,102,0.45); font-weight:400; }
+  /* detail panel price section */
+  .priceSection{
+    margin-top:10px; padding:10px; background:#fafafa;
+    border:1px solid #eee; border-radius:8px;
+  }
+  .priceSection label{ font-size:12px; color:#555; display:block; margin-bottom:4px; }
+  .priceMain{
+    display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;
+  }
+  .priceMain .amount{ font-size:20px; font-weight:700; color:#2d7a3a; }
+  .priceMain .amount.none{ color:#aaa; font-size:14px; font-weight:400; }
+  #refreshPriceBtn{
+    background:none; border:1px solid #ccc; border-radius:8px;
+    padding:4px 9px; font-size:11px; cursor:pointer; color:#555;
+  }
+  #refreshPriceBtn:hover{ background:#eee; }
+  .priceBreakdown{ font-size:11px; color:#777; }
+  .priceBreakdown table{ width:100%; border-collapse:collapse; }
+  .priceBreakdown td{ padding:2px 4px; }
+  .priceBreakdown td:last-child{ text-align:right; font-weight:600; color:#444; }
+  .pocket .ownedDot{
+    position:absolute; top:4px; left:4px; width:10px; height:10px; border-radius:50%;
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,0.8);
+  }
+  .pocket .ownedDot.owned{ background: var(--owned); }
+  .pocket .ownedDot.missing{ background: var(--missing); }
+
+  /* page edge stack illusion */
+  .edgeStack{
+    position:absolute; top:6px; bottom:6px; width:8px;
+    background: repeating-linear-gradient(to bottom, var(--page-edge) 0px, var(--page-edge) 2px, transparent 2px, transparent 4px);
+    opacity:0.6;
+  }
+  .edgeStack.leftEdge{ left:-2px; }
+  .edgeStack.rightEdge{ right:-2px; }
+
+  /* Nav arrows */
+  .navArrow{
+    position:absolute; top:50%; transform: translateY(-50%);
+    width:46px; height:46px; border-radius:50%;
+    background: rgba(0,0,0,0.45); color:#fff; border:none;
+    font-size:20px; cursor:pointer; z-index:25;
+    display:flex; align-items:center; justify-content:center;
+    transition: background .2s ease, opacity .2s ease;
+  }
+  .navArrow:hover{ background: rgba(0,0,0,0.7); }
+  .navArrow:disabled{ opacity:0.25; cursor:default; }
+  #prevBtn{ left:-58px; }
+  #nextBtn{ right:-58px; }
+  @media (max-width: 760px){
+    #prevBtn{ left:4px; }
+    #nextBtn{ right:4px; }
+  }
+
+  #pageCounter{
+    position:absolute; bottom:-32px; left:50%; transform:translateX(-50%);
+    color:#ddd; font-size:13px; letter-spacing:0.5px;
+  }
+
+  /* ---------------- SEARCH PANEL ---------------- */
+  #overlay{
+    position:fixed; inset:0; background: rgba(0,0,0,0.55);
+    display:none; align-items:center; justify-content:center; z-index:100;
+  }
+  #overlay.visible{ display:flex; }
+  .panel{
+    background:#fff; width:min(92vw,520px); max-height:84vh; overflow-y:auto;
+    border-radius:12px; padding:20px; box-shadow:0 20px 60px rgba(0,0,0,0.5);
+  }
+  .panel h2{ margin:0 0 12px 0; font-family:Georgia,serif; color:var(--leather-dark); }
+  .panel input[type=text]{
+    width:100%; padding:10px 12px; border:1px solid #ccc; border-radius:8px; font-size:14px;
+    margin-bottom:8px;
+  }
+  .panel button.primary{
+    background: var(--leather); color:#fff; border:none; padding:10px 16px;
+    border-radius:8px; cursor:pointer; font-size:14px; margin-right:6px;
+  }
+  .panel button.primary:hover{ background: var(--leather-dark); }
+  .panel button.secondary{
+    background:#eee; color:#333; border:none; padding:10px 16px;
+    border-radius:8px; cursor:pointer; font-size:14px;
+  }
+  .panel button.secondary:hover{ background:#ddd; }
+  .panel .closeRow{ display:flex; justify-content:flex-end; margin-top:14px; }
+
+  #resultsGrid{
+    display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-top:10px;
+  }
+  .resultCard{
+    border:1px solid #ddd; border-radius:8px; padding:6px; text-align:center; cursor:pointer;
+    transition: box-shadow .15s ease, transform .15s ease;
+    font-size:11px;
+  }
+  .resultCard:hover{ box-shadow:0 4px 10px rgba(0,0,0,0.2); transform: translateY(-2px); }
+  .resultCard img{ width:100%; height:auto; border-radius:4px; }
+  .loadingMsg, .emptyMsg{ text-align:center; color:#888; padding:20px; font-size:13px; }
+
+  /* Slot detail panel */
+  .detailRow{ display:flex; gap:14px; margin-bottom:14px; }
+  .detailRow img{ width:110px; border-radius:8px; box-shadow:0 4px 10px rgba(0,0,0,0.2); }
+  .detailFields label{ display:block; font-size:12px; color:#555; margin-top:8px; }
+  .detailFields input, .detailFields select, .detailFields textarea{
+    width:100%; padding:6px 8px; border:1px solid #ccc; border-radius:6px; font-size:13px; margin-top:2px;
+  }
+  .toggleOwned{
+    display:inline-flex; border-radius:20px; overflow:hidden; border:1px solid #ccc; margin-top:4px;
+  }
+  .toggleOwned button{
+    border:none; padding:6px 14px; font-size:12px; cursor:pointer; background:#f5f5f5;
+  }
+  .toggleOwned button.active.owned{ background: var(--owned); color:#fff; }
+  .toggleOwned button.active.missing{ background: var(--missing); color:#fff; }
+
+  /* loading indicator */
+  #loadingIndicator{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background: rgba(0,0,0,0.5); color:#fff; font-size:14px; z-index:200; flex-direction:column; gap:10px;
+  }
+  #loadingIndicator.hide{ display:none; }
+  .spinner{
+    width:34px; height:34px; border:4px solid rgba(255,255,255,0.3); border-top-color:#fff;
+    border-radius:50%; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  #toast{
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+    background: rgba(0,0,0,0.8); color:#fff; padding:8px 16px; border-radius:20px;
+    font-size:13px; z-index: 300; opacity:0; transition: opacity .3s ease; pointer-events:none;
+  }
+  #toast.show{ opacity:1; }
+
+  /* ---------- GALLERY VIEW ---------- */
+
+  /* Toggle button in the top bar */
+  #galleryBtn{
+    background:rgba(0,0,0,0.4); border:none; color:#eee;
+    border-radius:20px; padding:6px 12px; cursor:pointer; font-size:13px;
+    margin-right:6px; transition:background .15s;
+  }
+  #galleryBtn:hover{ background:rgba(0,0,0,0.6); }
+  /* Highlight button when gallery is active */
+  #galleryBtn.active{ background:var(--leather); }
+
+  /* Gallery container — sits behind the binder wrap; shown via .gallery-mode class */
+  #galleryView{
+    position:absolute; inset:0;
+    padding-top:52px; /* leave room for the fixed top bar */
+    display:none; flex-direction:column;
+    overflow:hidden;
+  }
+  /* Show gallery + hide binder when .gallery-mode is on #app */
+  #app.gallery-mode #galleryView{ display:flex; }
+  #app.gallery-mode #binderWrap{ display:none; }
+
+  /* Filter / sort / search toolbar */
+  #galleryControls{
+    display:flex; align-items:center; gap:7px; flex-wrap:wrap;
+    padding:8px 16px 8px;
+    background:rgba(0,0,0,0.25);
+    flex-shrink:0;
+  }
+  /* Pill-shaped filter chips: All / Owned / Missing */
+  .galleryFilterChip{
+    background:rgba(255,255,255,0.1); color:#ccc;
+    border:1.5px solid rgba(255,255,255,0.18); border-radius:16px;
+    padding:4px 12px; font-size:12px; cursor:pointer;
+    transition:background .15s, color .15s;
+  }
+  .galleryFilterChip.active{
+    background:var(--leather); color:#fff;
+    border-color:var(--leather);
+  }
+  /* Name search box */
+  #gallerySearch{
+    background:rgba(255,255,255,0.1); border:1.5px solid rgba(255,255,255,0.2);
+    color:#fff; border-radius:16px; padding:4px 12px; font-size:12px;
+    outline:none; min-width:130px;
+  }
+  #gallerySearch::placeholder{ color:rgba(255,255,255,0.35); }
+  /* Sort dropdown */
+  #gallerySortSelect{
+    background:rgba(255,255,255,0.1); border:1.5px solid rgba(255,255,255,0.2);
+    color:#ccc; border-radius:16px; padding:4px 10px; font-size:12px;
+    cursor:pointer; outline:none;
+  }
+  /* Card count label pushed to the right */
+  #galleryCount{ margin-left:auto; color:rgba(255,255,255,0.4); font-size:12px; }
+
+  /* Scrollable card grid */
+  #galleryGrid{
+    flex:1; overflow-y:auto;
+    display:grid;
+    /* auto-fill columns — wide screens get ~8 cards, mobile gets 3-4 */
+    grid-template-columns:repeat(auto-fill, minmax(110px,1fr));
+    gap:10px; padding:12px 16px;
+    align-content:start;
+  }
+  /* Individual card tile */
+  .galleryCard{
+    background:rgba(255,255,255,0.07);
+    border:1.5px solid rgba(255,255,255,0.12);
+    border-radius:8px; overflow:hidden; cursor:pointer;
+    transition:transform .15s, box-shadow .15s;
+  }
+  .galleryCard:hover{ transform:scale(1.04); box-shadow:0 6px 18px rgba(0,0,0,0.45); }
+  /* Dim the image for cards marked as missing */
+  .galleryCard.missing-card img{ filter:grayscale(0.9) brightness(0.7); opacity:0.7; }
+  .galleryCard img{ width:100%; aspect-ratio:2/3; object-fit:cover; display:block; }
+  /* Info strip below the card image */
+  .galleryCardInfo{ padding:4px 6px 5px; }
+  .galleryCardName{
+    font-size:10px; color:#ddd; font-weight:600;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px;
+  }
+  /* Row with status dot, page number, and price */
+  .galleryCardMeta{ display:flex; justify-content:space-between; align-items:center; gap:3px; }
+  .galleryCardPage{ font-size:9px; color:rgba(255,255,255,0.38); }
+  .galleryCardPrice{ font-size:10px; color:#ffe066; font-weight:700; }
+  /* Coloured dot matching owned/missing colour scheme */
+  .galleryCardStatus{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .galleryCardStatus.owned{ background:var(--owned); }
+  .galleryCardStatus.missing{ background:var(--missing); }
+  /* Empty state when no cards match the current filter */
+  .galleryEmpty{
+    grid-column:1/-1; text-align:center;
+    color:rgba(255,255,255,0.3); padding:40px; font-size:14px;
+  }
+
+  /* ---------- PAGE CONTROLS ---------- */
+  #pageControls{
+    position:absolute; bottom:-62px; left:50%; transform:translateX(-50%);
+    display:flex; align-items:center; gap:6px; white-space:nowrap;
+  }
+  .pageCtrlBtn{
+    background:rgba(255,255,255,0.12); color:#ddd; border:1px solid rgba(255,255,255,0.18);
+    padding:5px 11px; border-radius:14px; font-size:11px; cursor:pointer;
+    transition:background .15s ease, opacity .15s ease;
+  }
+  .pageCtrlBtn:hover:not(:disabled){ background:rgba(255,255,255,0.22); }
+  .pageCtrlBtn:disabled{ opacity:0.28; cursor:default; }
+  .pageCtrlBtn.add{ background:rgba(58,157,79,0.35); border-color:rgba(58,157,79,0.5); color:#9efdb4; }
+  .pageCtrlBtn.add:hover{ background:rgba(58,157,79,0.55); }
+  .pageCtrlBtn.remove{ background:rgba(220,60,60,0.25); border-color:rgba(220,60,60,0.4); color:#ffb3b3; }
+  .pageCtrlBtn.remove:hover:not(:disabled){ background:rgba(220,60,60,0.45); }
+
+  /* ---------- FOG REVEAL ---------- */
+
+  /* Canvas layer that sits on top of a filled card pocket.
+     touch-action:none prevents the browser from stealing touch events
+     (which would break wipe gestures on mobile). */
+  .fogCanvas{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    border-radius:6px;
+    cursor:crosshair;
+    touch-action:none;
+    z-index:5; /* above qty badge, price badge, owned dot */
+  }
+
+  /* Fog toggle button in the top bar */
+  #fogBtn{
+    background:rgba(0,0,0,0.4); border:none; color:#eee;
+    border-radius:20px; padding:6px 12px; cursor:pointer; font-size:13px;
+    margin-right:6px; transition:background .15s;
+  }
+  #fogBtn:hover{ background:rgba(0,0,0,0.6); }
+  /* Cool blue tint when fog mode is on */
+  #fogBtn.active{ background:rgba(70,120,185,0.65); color:#dff0ff; }
+
+  /* "Reset" button — re-fogs all revealed cards on the current page;
+     only visible while fog mode is active */
+  #resetFogBtn{
+    background:rgba(60,95,150,0.3); border:1.5px solid rgba(100,155,220,0.4);
+    color:#a8caef; border-radius:20px; padding:6px 12px;
+    cursor:pointer; font-size:12px; margin-right:6px; display:none;
+  }
+  #resetFogBtn:hover{ background:rgba(60,95,150,0.55); }
+
+  /* ---------- SCAN FEATURE ---------- */
+  .pageHeader{
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    padding:6px 10px 2px; flex-shrink:0;
+  }
+  .pageHeaderLabel{ font-family:Georgia,serif; color:var(--leather-dark); font-size:13px; opacity:0.7; }
+  .scanPageBtn{
+    background:var(--leather); color:#fff; border:none;
+    padding:3px 9px; border-radius:12px; font-size:10px; cursor:pointer;
+    transition:background .15s ease; white-space:nowrap;
+  }
+  .scanPageBtn:hover{ background:var(--leather-dark); }
+  .scanReviewGrid{
+    display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-top:10px;
+  }
+  .scanSlot{
+    border:2px solid #ddd; border-radius:8px; overflow:hidden;
+    background:#f9f9f9; display:flex; flex-direction:column;
+  }
+  .scanSlot.confirmed{ border-color:var(--owned); }
+  .scanSlot.needs-fix{ border-color:#e88; }
+  .scanSlotTop{
+    position:relative; aspect-ratio:3/4; overflow:hidden; background:#eee; flex-shrink:0;
+  }
+  .scanSlotTop img{ width:100%; height:100%; object-fit:cover; }
+  .scanSlotNum{
+    position:absolute; top:3px; left:3px;
+    background:rgba(0,0,0,0.65); color:#fff; font-size:9px;
+    padding:1px 5px; border-radius:8px;
+  }
+  .confBadge{
+    position:absolute; top:3px; right:3px;
+    font-size:9px; padding:2px 4px; border-radius:6px; font-weight:bold;
+  }
+  .confBadge.high{ background:#d4edda; color:#155724; }
+  .confBadge.medium{ background:#fff3cd; color:#856404; }
+  .confBadge.cached{ background:#cce5ff; color:#004085; }
+  .confBadge.low,.confBadge.unknown,.confBadge.fixed{ background:#f8d7da; color:#721c24; }
+  .confBadge.fixed{ background:#e2d9f3; color:#4a235a; }
+  .scanSlotInfo{ padding:4px 6px; font-size:10px; color:#333; line-height:1.3; flex:1; }
+  .scanSlotInfo strong{ display:block; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .scanSlotInfo .setName{ color:#999; font-size:9px; }
+  .scanFixBtn{
+    width:100%; border:none; border-top:1px solid #eee;
+    background:var(--leather); color:#fff; font-size:10px; padding:5px; cursor:pointer;
+  }
+  .scanFixBtn:hover{ background:var(--leather-dark); }
+  .scanSaveAllBtn{
+    width:100%; margin-top:12px; padding:11px;
+    background:var(--owned); color:#fff; border:none;
+    border-radius:8px; font-size:14px; cursor:pointer; font-weight:600;
+  }
+  .scanSaveAllBtn:hover{ filter:brightness(1.1); }
+  .scanNote{ font-size:11px; color:#aaa; margin:5px 0 0; text-align:center; }
+  .scanFixHeader{ display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+  .scanFixHeader img{ width:64px; border-radius:6px; border:1px solid #ddd; flex-shrink:0; }
+</style>
+</head>
+<body>
+
+<!-- ============== COVER ============== -->
+<input type="file" id="coverFileInput" accept="image/*" style="display:none">
+<div id="coverStage">
+  <div id="cover">
+    <img id="coverImg" src="" alt="cover">
+    <div id="coverBtns">
+      <button id="coverChangeBtn">✏ Change Cover</button>
+      <button id="coverRemoveBtn" style="display:none">✕ Remove</button>
+    </div>
+    <svg class="firemark" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <!-- Crescent moon -->
+      <path d="M58 14 C36 18 20 36 20 55 C20 74 38 90 60 88 C42 83 30 70 30 55 C30 40 42 27 58 22 Z"
+            fill="#ddb8ff" stroke="#7700bb" stroke-width="2"/>
+      <!-- Three decorative stars -->
+      <circle cx="75" cy="22" r="4"   fill="#ffe066"/>
+      <circle cx="68" cy="11" r="2.5" fill="#ffccff"/>
+      <circle cx="83" cy="34" r="2"   fill="#ffffff"/>
+    </svg>
+    <h1>Melanie's Binder</h1>
+    <div class="tap-prompt">tap to open</div>
+  </div>
+</div>
+
+<!-- ============== MAIN APP ============== -->
+<div id="app">
+  <div id="topBar">
+    <div class="summary">
+      <span><span class="dot owned"></span><span id="ownedCount">0</span> owned</span>
+      <span><span class="dot missing"></span><span id="missingCount">0</span> missing</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0">
+      <button id="fogBtn" title="Toggle fog reveal mode">🌫 Fog</button>
+      <button id="resetFogBtn" title="Re-apply fog to all cards on this page">↺ Reset</button>
+      <button id="galleryBtn" title="Switch to gallery view">⊞ Gallery</button>
+      <button id="settingsBtn">⚙ Settings</button>
+    </div>
+  </div>
+
+  <!-- ============== GALLERY VIEW ============== -->
+  <!-- Hidden by default; shown when #app has class .gallery-mode -->
+  <div id="galleryView">
+    <div id="galleryControls">
+      <!-- Status filter chips -->
+      <button class="galleryFilterChip active" data-filter="all">All</button>
+      <button class="galleryFilterChip" data-filter="owned">Owned</button>
+      <button class="galleryFilterChip" data-filter="missing">Missing</button>
+      <!-- Name search -->
+      <input type="text" id="gallerySearch" placeholder="Search name…">
+      <!-- Sort order -->
+      <select id="gallerySortSelect">
+        <option value="page">Sort: Page order</option>
+        <option value="name">Sort: Name A–Z</option>
+        <option value="price">Sort: Price ↓</option>
+      </select>
+      <!-- Running count of visible cards -->
+      <span id="galleryCount"></span>
+    </div>
+    <!-- Card tiles injected here by renderGallery() -->
+    <div id="galleryGrid"></div>
+  </div>
+
+  <div id="binderWrap">
+    <div id="binder">
+      <div class="pageSlotHolder" id="pageHolder">
+        <!-- pages injected here as .pageFace -->
+      </div>
+    </div>
+    <button class="navArrow" id="prevBtn">‹</button>
+    <button class="navArrow" id="nextBtn">›</button>
+    <div id="pageCounter">Page 1 of 1</div>
+    <div id="pageControls">
+      <button class="pageCtrlBtn" id="pageMoveL" title="Move page left">← Move</button>
+      <button class="pageCtrlBtn add" id="pageAdd" title="Add a new page after this one">+ Add Page</button>
+      <button class="pageCtrlBtn remove" id="pageRemove" title="Remove this page">✕ Remove</button>
+      <button class="pageCtrlBtn" id="pageMoveR" title="Move page right">Move →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== OVERLAY (search / detail / settings) ============== -->
+<div id="overlay">
+  <div class="panel" id="panelContent"></div>
+</div>
+
+<div id="loadingIndicator" class="hide">
+  <div class="spinner"></div>
+  <div id="loadingText">Loading your binder…</div>
+</div>
+
+<div id="toast"></div>
+
+<!-- hidden file input for scan — accept camera or gallery -->
+<input type="file" id="scanFileInput" accept="image/*" capture="environment" style="display:none">
+
+<script>
+/* =====================================================================
+   FIREBASE CONFIG
+   ---------------------------------------------------------------------
+   Paste your real Firebase project config below. To get it:
+   1. Go to https://console.firebase.google.com → create/open a project
+   2. Project settings → General → "Your apps" → Web app → copy config
+   3. Enable Firestore: Build → Firestore Database → Create database
+   4. (Recommended for a personal app) Set Firestore rules to allow
+      read/write only for your own use, e.g. during development:
+        rules_version = '2';
+        service cloud.firestore {
+          match /databases/{database}/documents {
+            match /{document=**} { allow read, write: if true; }
+          }
+        }
+      Lock this down later if you add real authentication.
+   Until you paste real values here, the app runs in offline/local mode
+   (saved to localStorage) so you can still use and test it.
+===================================================================== */
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+const BINDER_DOC_PATH = { collection: "binders", doc: "melanies-binder" };
+const PAGES_COUNT = 12;
+const SLOTS_PER_PAGE = 9;
+const LOCAL_KEY = "melanies_binder_local_v1";
+
+let db = null;
+let firebaseReady = false;
+
+function isFirebaseConfigured(){
+  return firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY" && firebaseConfig.projectId !== "YOUR_PROJECT_ID";
+}
+
+try {
+  if (isFirebaseConfigured() && window.firebase) {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    firebaseReady = true;
+  }
+} catch (e) {
+  console.warn("Firebase init failed, falling back to local storage.", e);
+  firebaseReady = false;
+}
+
+/* ---------------------------------------------------------------------
+   STATE
+   binderState = {
+     apiKey: "",
+     pages: [ [slot,slot,...9], [slot,...9], ... ]  // slot or null
+   }
+   slot = { cardId, name, image, set, owned, quantity, condition, notes }
+--------------------------------------------------------------------- */
+let binderState = {
+  apiKey: "",
+  anthropicKey: "",
+  coverImage: null,
+  pages: makeEmptyPages(PAGES_COUNT)
+};
+
+function makeEmptyPages(count){
+  const pages = [];
+  for (let p = 0; p < count; p++){
+    pages.push(new Array(SLOTS_PER_PAGE).fill(null));
+  }
+  return pages;
+}
+
+let currentSpread = 0; // a "spread" = two facing pages (left,right), but we treat pages individually flipping
+let activeSlotRef = null; // {pageIndex, slotIndex} when detail panel open
+let pendingPickSlotRef = null; // when search panel open for placing a card
+
+/* ---------------------------------------------------------------------
+   PERSISTENCE
+--------------------------------------------------------------------- */
+function showLoading(text){
+  document.getElementById('loadingText').textContent = text || "Loading…";
+  document.getElementById('loadingIndicator').classList.remove('hide');
+}
+function hideLoading(){
+  document.getElementById('loadingIndicator').classList.add('hide');
+}
+
+function loadLocal(){
+  try{
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (raw) return JSON.parse(raw);
+  }catch(e){}
+  return null;
+}
+function saveLocal(){
+  try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(binderState)); }catch(e){}
+}
+
+async function loadBinder(){
+  showLoading("Loading your binder…");
+  if (firebaseReady){
+    try{
+      const ref = db.collection(BINDER_DOC_PATH.collection).doc(BINDER_DOC_PATH.doc);
+      const snap = await ref.get();
+      if (snap.exists){
+        const data = snap.data();
+        binderState = normalizeLoaded(data);
+      } else {
+        await ref.set(binderState);
+      }
+      ref.onSnapshot((doc) => {
+        if (doc.exists){
+          binderState = normalizeLoaded(doc.data());
+          renderAll();
+          applyCoverImage(binderState.coverImage || null);
+        }
+      });
+    }catch(e){
+      console.warn("Firestore load failed, using local storage.", e);
+      const local = loadLocal();
+      if (local) binderState = normalizeLoaded(local);
+      toast("Cloud sync unavailable — using local storage.");
+    }
+  } else {
+    const local = loadLocal();
+    if (local) binderState = normalizeLoaded(local);
+  }
+  hideLoading();
+  renderAll();
+  loadCorrections();
+  initCoverImage();
+  initFogControls(); // wire up fog toggle + reset buttons
+  initGallery(); // wire up gallery toggle + filter/sort/search controls
+}
+
+function normalizeLoaded(data){
+  const out = { apiKey: data.apiKey || "", anthropicKey: data.anthropicKey || "", coverImage: data.coverImage || null, pages: [] };
+  const pages = Array.isArray(data.pages) ? data.pages : [];
+  // use saved page count (variable), fall back to default if none saved
+  const count = pages.length || PAGES_COUNT;
+  for (let p = 0; p < count; p++){
+    const src = pages[p] || [];
+    const page = new Array(SLOTS_PER_PAGE).fill(null);
+    for (let s = 0; s < SLOTS_PER_PAGE; s++){
+      page[s] = src[s] || null;
+    }
+    out.pages.push(page);
+  }
+  return out;
+}
+
+let saveTimer = null;
+function persist(){
+  saveLocal();
+  if (firebaseReady){
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      try{
+        const ref = db.collection(BINDER_DOC_PATH.collection).doc(BINDER_DOC_PATH.doc);
+        await ref.set(binderState);
+      }catch(e){
+        console.warn("Failed to save to Firestore.", e);
+        toast("Couldn't sync to cloud — saved locally.");
+      }
+    }, 250);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   COVER OPEN
+--------------------------------------------------------------------- */
+document.getElementById('cover').addEventListener('click', () => {
+  const cover = document.getElementById('cover');
+  cover.classList.add('opened');
+  setTimeout(() => {
+    document.getElementById('coverStage').classList.add('hide');
+    document.getElementById('app').classList.add('visible');
+    loadBinder();
+  }, 900);
+});
+
+/* ---------------------------------------------------------------------
+   RENDERING — page flip
+   We render ONE page at a time inside #pageHolder using a flip animation
+   between the outgoing and incoming page face.
+--------------------------------------------------------------------- */
+/* applyCoverImage — swaps the binder cover between custom photo and the
+   default Charizard gradient. Toggling the "custom-cover" class lets CSS
+   handle showing/hiding #coverImg and restyling ::before / ::after. */
+function applyCoverImage(dataUrl){
+  const cover    = document.getElementById('cover');
+  const img      = document.getElementById('coverImg');
+  const removeBtn = document.getElementById('coverRemoveBtn');
+
+  if (dataUrl){
+    // Set the photo, enable cover-image CSS mode, show Remove button
+    img.src = dataUrl;
+    cover.classList.add('custom-cover');
+    removeBtn.style.display = '';
+  } else {
+    // Clear photo, revert to gradient, hide Remove button
+    img.src = '';
+    cover.classList.remove('custom-cover');
+    removeBtn.style.display = 'none';
+  }
+}
+
+/* initCoverImage — called once on startup. Restores any saved cover image
+   from binderState and wires up the Change / Remove buttons and the hidden
+   file input that drives the image picker. */
+function initCoverImage(){
+  // Restore persisted cover photo on page load
+  applyCoverImage(binderState.coverImage || null);
+
+  // "Change Cover" button: stopPropagation so the click doesn't also
+  // open the binder, then proxy to the hidden <input type="file">
+  document.getElementById('coverChangeBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    document.getElementById('coverFileInput').click();
+  });
+
+  // "Remove" button: clears the saved image and reverts to gradient
+  document.getElementById('coverRemoveBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    binderState.coverImage = null;
+    persist();
+    applyCoverImage(null);
+  });
+
+  // File picker: convert chosen image to a data URL, store it in state,
+  // then apply it live. Reset input value so the same file can be
+  // re-selected later (browser won't fire change otherwise).
+  document.getElementById('coverFileInput').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = await fileToDataUrl(file); // reuses scan helper — reads file as base64 data URL
+    binderState.coverImage = url;
+    persist();
+    applyCoverImage(url);
+    e.target.value = ''; // reset so same file can trigger change again
+  });
+}
+
+/* =====================================================================
+   GALLERY VIEW — flat scrollable grid of every card across all pages
+   Toggled by the ⊞ Gallery button in the top bar.
+   ===================================================================== */
+
+let galleryMode   = false;  // true = gallery visible, false = binder visible
+let galleryFilter = 'all';  // active status filter: 'all' | 'owned' | 'missing'
+let gallerySort   = 'page'; // active sort: 'page' | 'name' | 'price'
+let gallerySearch = '';     // current text in the name search box
+
+/* toggleGallery — flips between binder page view and gallery view.
+   Adding .gallery-mode to #app is what CSS uses to show/hide each section. */
+function toggleGallery(){
+  galleryMode = !galleryMode;
+  const app = document.getElementById('app');
+  const btn = document.getElementById('galleryBtn');
+
+  if (galleryMode){
+    app.classList.add('gallery-mode');
+    btn.classList.add('active');
+    btn.textContent = '⊟ Binder'; // label changes to show what clicking will go back to
+    renderGallery();
+  } else {
+    app.classList.remove('gallery-mode');
+    btn.classList.remove('active');
+    btn.textContent = '⊞ Gallery';
+    renderPage(currentSpread, null); // restore the binder page that was showing
+  }
+}
+
+/* renderGallery — collects every filled slot from all pages, applies the
+   active filter / search / sort, then stamps card tiles into #galleryGrid. */
+function renderGallery(){
+  // Collect all filled slots with their page + slot location
+  const all = [];
+  binderState.pages.forEach((page, pageIndex) => {
+    page.forEach((slot, slotIndex) => {
+      if (slot && slot.cardId){
+        all.push({ slot, pageIndex, slotIndex });
+      }
+    });
+  });
+
+  // Apply owned/missing filter
+  let visible = all.filter(({ slot }) => {
+    if (galleryFilter === 'owned')   return  slot.owned;
+    if (galleryFilter === 'missing') return !slot.owned;
+    return true; // 'all' — no filter
+  });
+
+  // Apply name search (case-insensitive substring match)
+  if (gallerySearch.trim()){
+    const q = gallerySearch.trim().toLowerCase();
+    visible = visible.filter(({ slot }) => slot.name.toLowerCase().includes(q));
+  }
+
+  // Sort results
+  visible.sort((a, b) => {
+    if (gallerySort === 'name')  return a.slot.name.localeCompare(b.slot.name);
+    if (gallerySort === 'price'){
+      // Cards with no price sort to the bottom
+      const pa = a.slot.price ?? -1;
+      const pb = b.slot.price ?? -1;
+      return pb - pa; // highest price first
+    }
+    // Default 'page': use the natural page × slot position
+    return (a.pageIndex * 9 + a.slotIndex) - (b.pageIndex * 9 + b.slotIndex);
+  });
+
+  // Update the count label
+  document.getElementById('galleryCount').textContent =
+    `${visible.length} card${visible.length !== 1 ? 's' : ''}`;
+
+  const grid = document.getElementById('galleryGrid');
+  grid.innerHTML = '';
+
+  // Show empty state when nothing matches
+  if (visible.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'galleryEmpty';
+    empty.textContent = 'No cards match your filter.';
+    grid.appendChild(empty);
+    return;
+  }
+
+  // Build one tile per card
+  visible.forEach(({ slot, pageIndex, slotIndex }) => {
+    const tile = document.createElement('div');
+    tile.className = 'galleryCard' + (slot.owned ? '' : ' missing-card');
+
+    const priceText   = slot.price != null ? `$${Number(slot.price).toFixed(2)}` : '—';
+    const statusClass = slot.owned ? 'owned' : 'missing';
+
+    // loading="lazy" defers off-screen images so the gallery opens fast
+    tile.innerHTML = `
+      <img src="${slot.image}" alt="${escapeHtml(slot.name)}" loading="lazy">
+      <div class="galleryCardInfo">
+        <div class="galleryCardName">${escapeHtml(slot.name)}</div>
+        <div class="galleryCardMeta">
+          <span class="galleryCardStatus ${statusClass}"></span>
+          <span class="galleryCardPage">Pg ${pageIndex + 1}</span>
+          <span class="galleryCardPrice">${priceText}</span>
+        </div>
+      </div>`;
+
+    // Clicking a tile reuses the existing detail panel — same as tapping in binder
+    tile.addEventListener('click', () => openDetailPanel(pageIndex, slotIndex));
+    grid.appendChild(tile);
+  });
+}
+
+/* =====================================================================
+   FOG REVEAL MODE
+   Cards are covered by a frosted-glass canvas overlay. Dragging over
+   a card erases the fog pixels (destination-out compositing) to reveal
+   the card underneath — like wiping condensation off a window.
+   Fog resets on every page navigation since the DOM is rebuilt.
+   ===================================================================== */
+
+let fogMode = false; // true = fog canvases are added to all filled pockets
+
+/* drawFog — paints a layered frost effect onto a canvas element.
+   Combines a solid blue-grey base, a dark vignette, random frost
+   specks, and soft cloudy blobs for a convincing condensation look. */
+function drawFog(canvas){
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+
+  // Solid semi-opaque base — cool blue-grey like real condensation on glass
+  ctx.fillStyle = 'rgba(185,208,228,0.97)';
+  ctx.fillRect(0, 0, w, h);
+
+  // Radial vignette — lighter centre, darker edges for depth
+  const vig = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, Math.max(w,h) * 0.72);
+  vig.addColorStop(0, 'rgba(225,240,252,0)');
+  vig.addColorStop(1, 'rgba(90,125,158,0.52)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, w, h);
+
+  // Fine frost specks — hundreds of tiny white dots give a crystalline texture
+  for (let i = 0; i < 520; i++){
+    const x = Math.random() * w;
+    const y = Math.random() * h;
+    ctx.beginPath();
+    ctx.arc(x, y, Math.random() * 2.2 + 0.3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${(Math.random() * 0.18 + 0.04).toFixed(2)})`;
+    ctx.fill();
+  }
+
+  // Soft cloudy blobs — larger diffuse spots break up the uniformity
+  for (let i = 0; i < 14; i++){
+    const x = Math.random() * w, y = Math.random() * h;
+    const r = Math.random() * 22 + 8;
+    const blob = ctx.createRadialGradient(x, y, 0, x, y, r);
+    blob.addColorStop(0, 'rgba(255,255,255,0.13)');
+    blob.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = blob;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+}
+
+/* attachWipeListeners — wires mouse + touch events to a fog canvas so
+   the user can drag to erase fog (like wiping a window) or tap to open
+   the detail panel. A short tap (< 4 px movement) is treated as a click. */
+function attachWipeListeners(canvas){
+  const pageIndex = parseInt(canvas.dataset.pageIdx);
+  const slotIndex = parseInt(canvas.dataset.slotIdx);
+
+  // Convert browser client coords → canvas pixel coords
+  // (needed because CSS scales the canvas element but pixel dimensions are fixed)
+  const toCanvas = (clientX, clientY) => {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (clientX - r.left) * (canvas.width  / r.width),
+      y: (clientY - r.top)  * (canvas.height / r.height)
+    };
+  };
+
+  // Soft radial eraser — hard at centre, fades to transparent at edge
+  // so wipe strokes blend naturally rather than leaving hard circles
+  const erase = (x, y) => {
+    const ctx = canvas.getContext('2d');
+    const R   = Math.max(canvas.width, canvas.height) * 0.23; // brush ~23% of card size
+    ctx.globalCompositeOperation = 'destination-out'; // erases canvas pixels
+    const g = ctx.createRadialGradient(x, y, 0, x, y, R);
+    g.addColorStop(0,    'rgba(0,0,0,1)');
+    g.addColorStop(0.55, 'rgba(0,0,0,0.85)');
+    g.addColorStop(1,    'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over'; // always restore default mode
+  };
+
+  let moved = false, startX = 0, startY = 0;
+
+  // Mouse
+  canvas.addEventListener('mousedown', e => {
+    moved = false; startX = e.clientX; startY = e.clientY;
+    erase(...Object.values(toCanvas(e.clientX, e.clientY)));
+  });
+  canvas.addEventListener('mousemove', e => {
+    if (!e.buttons) return;
+    // Mark as a drag once the cursor moves more than 4 px from start
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
+    erase(...Object.values(toCanvas(e.clientX, e.clientY)));
+  });
+  canvas.addEventListener('mouseup', () => {
+    // Tap (not drag) → open detail panel as if the pocket was clicked normally
+    if (!moved) openDetailPanel(pageIndex, slotIndex);
+    moved = false;
+  });
+
+  // Touch (passive:false lets us call e.preventDefault() to block scroll)
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    moved = false;
+    const t = e.touches[0]; startX = t.clientX; startY = t.clientY;
+    erase(...Object.values(toCanvas(t.clientX, t.clientY)));
+  }, {passive: false});
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    moved = true;
+    const t = e.touches[0];
+    erase(...Object.values(toCanvas(t.clientX, t.clientY)));
+  }, {passive: false});
+  canvas.addEventListener('touchend', () => {
+    if (!moved) openDetailPanel(pageIndex, slotIndex);
+    moved = false;
+  });
+}
+
+/* initFogCanvases — called via setTimeout after a page face is inserted into
+   the DOM, so CSS layout has settled and offsetWidth/Height are correct.
+   Sizes every fog canvas in pixels, draws the initial frost, then wires wipes. */
+function initFogCanvases(face){
+  face.querySelectorAll('.fogCanvas').forEach(canvas => {
+    const pocket  = canvas.parentElement;
+    canvas.width  = pocket.offsetWidth  || 100;
+    canvas.height = pocket.offsetHeight || 140;
+    drawFog(canvas);
+    attachWipeListeners(canvas);
+  });
+}
+
+/* toggleFogMode — flips fog on/off. Re-renders the current page so that
+   buildPocketEl knows whether to add fog canvases. */
+function toggleFogMode(){
+  fogMode = !fogMode;
+  const btn      = document.getElementById('fogBtn');
+  const resetBtn = document.getElementById('resetFogBtn');
+  btn.classList.toggle('active', fogMode);
+  btn.textContent        = fogMode ? '🌫 Fog On' : '🌫 Fog';
+  resetBtn.style.display = fogMode ? ''         : 'none';
+  renderPage(currentSpread, null); // rebuild so pockets gain/lose fog overlay
+}
+
+/* resetFog — redraws fresh fog on every visible canvas, re-hiding any cards
+   the user has already wiped. Does not affect fog-off mode. */
+function resetFog(){
+  document.querySelectorAll('.fogCanvas').forEach(canvas => {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawFog(canvas); // paint fresh frost over the cleared area
+  });
+}
+
+/* initFogControls — wires the Fog and Reset buttons once on startup. */
+function initFogControls(){
+  document.getElementById('fogBtn').addEventListener('click', toggleFogMode);
+  document.getElementById('resetFogBtn').addEventListener('click', resetFog);
+}
+
+/* initGallery — called once on startup to wire up the toggle button and
+   all the filter / sort / search controls in the gallery toolbar. */
+function initGallery(){
+  document.getElementById('galleryBtn').addEventListener('click', toggleGallery);
+
+  // Filter chips: clicking one activates it and deactivates the others
+  document.querySelectorAll('.galleryFilterChip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      galleryFilter = chip.dataset.filter;
+      document.querySelectorAll('.galleryFilterChip')
+        .forEach(c => c.classList.toggle('active', c === chip));
+      if (galleryMode) renderGallery();
+    });
+  });
+
+  // Sort dropdown
+  document.getElementById('gallerySortSelect').addEventListener('change', e => {
+    gallerySort = e.target.value;
+    if (galleryMode) renderGallery();
+  });
+
+  // Name search — debounced 200 ms so it doesn't re-render on every keystroke
+  let searchTimer;
+  document.getElementById('gallerySearch').addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      gallerySearch = e.target.value;
+      if (galleryMode) renderGallery();
+    }, 200);
+  });
+}
+
+function renderAll(){
+  renderPage(currentSpread, null);
+  updateCounter();
+  updateSummary();
+  // Keep gallery in sync whenever state changes (e.g. card added, detail saved)
+  if (galleryMode) renderGallery();
+}
+
+function updateCounter(){
+  const total = binderState.pages.length;
+  document.getElementById('pageCounter').textContent = `Page ${currentSpread+1} of ${total}`;
+  document.getElementById('prevBtn').disabled = currentSpread <= 0;
+  document.getElementById('nextBtn').disabled = currentSpread >= total - 1;
+  // page control buttons
+  const moveL = document.getElementById('pageMoveL');
+  const moveR = document.getElementById('pageMoveR');
+  const remBtn = document.getElementById('pageRemove');
+  if (moveL) moveL.disabled = currentSpread <= 0;
+  if (moveR) moveR.disabled = currentSpread >= total - 1;
+  if (remBtn) remBtn.disabled = total <= 1;
+}
+
+function updateSummary(){
+  let owned = 0, missing = 0;
+  binderState.pages.forEach(page => page.forEach(slot => {
+    if (slot){
+      if (slot.owned) owned++; else missing++;
+    }
+  }));
+  document.getElementById('ownedCount').textContent = owned;
+  document.getElementById('missingCount').textContent = missing;
+}
+
+function buildPageFaceEl(pageIndex){
+  const face = document.createElement('div');
+  face.className = 'pageFace';
+  const header = document.createElement('div');
+  header.className = 'pageHeader';
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'pageHeaderLabel';
+  labelSpan.textContent = `— Page ${pageIndex+1} —`;
+  const scanBtn = document.createElement('button');
+  scanBtn.className = 'scanPageBtn';
+  scanBtn.textContent = '📷 Scan Page';
+  scanBtn.addEventListener('click', (e) => { e.stopPropagation(); openScanFlow(pageIndex); });
+  header.appendChild(labelSpan);
+  header.appendChild(scanBtn);
+  const grid = document.createElement('div');
+  grid.className = 'grid3x3';
+
+  const page = binderState.pages[pageIndex] || new Array(SLOTS_PER_PAGE).fill(null);
+  for (let s = 0; s < SLOTS_PER_PAGE; s++){
+    grid.appendChild(buildPocketEl(pageIndex, s, page[s]));
+  }
+  face.appendChild(header);
+  face.appendChild(grid);
+  // After layout settles: fetch missing prices + size/draw any fog canvases
+  setTimeout(() => {
+    triggerPriceFetches(pageIndex);
+    if (fogMode) initFogCanvases(face); // must run after layout so offsetWidth is non-zero
+  }, 50);
+  return face;
+}
+
+function buildPocketEl(pageIndex, slotIndex, slot){
+  const pocket = document.createElement('div');
+  pocket.id = `pocket-${pageIndex}-${slotIndex}`;
+  pocket.className = 'pocket' + (slot ? ' filled' : '') + (slot && !slot.owned ? ' missing' : '');
+  pocket.addEventListener('click', () => onPocketClick(pageIndex, slotIndex));
+
+  if (slot){
+    const img = document.createElement('img');
+    img.src = slot.image || '';
+    img.alt = slot.name || 'card';
+    pocket.appendChild(img);
+
+    const dot = document.createElement('div');
+    dot.className = 'ownedDot ' + (slot.owned ? 'owned' : 'missing');
+    pocket.appendChild(dot);
+
+    if (slot.quantity && slot.quantity > 1){
+      const badge = document.createElement('div');
+      badge.className = 'qtyBadge';
+      badge.textContent = 'x' + slot.quantity;
+      pocket.appendChild(badge);
+    }
+
+    const priceBadge = document.createElement('div');
+    if (slot.price != null){
+      priceBadge.className = 'priceBadge';
+      priceBadge.textContent = `$${Number(slot.price).toFixed(2)}`;
+    } else {
+      priceBadge.className = 'priceBadge loading';
+      priceBadge.textContent = '…';
+    }
+    pocket.appendChild(priceBadge);
+
+    // Fog canvas — added on top when fog mode is active; sized + drawn later
+    // in initFogCanvases() once the element is in the DOM and has real dimensions
+    if (fogMode){
+      const fog = document.createElement('canvas');
+      fog.className = 'fogCanvas';
+      fog.dataset.pageIdx = pageIndex;
+      fog.dataset.slotIdx = slotIndex;
+      pocket.appendChild(fog);
+    }
+  } else {
+    const plus = document.createElement('div');
+    plus.className = 'plus';
+    plus.textContent = '+';
+    pocket.appendChild(plus);
+  }
+  return pocket;
+}
+
+/* getMarketPrice — picks the best single market price from the tcgplayer
+   prices object. Prefers holofoil variants first (usually the most
+   recognised value), then falls back through normal and older print types.
+   Returns null if the card has no TCGPlayer pricing at all. */
+function getMarketPrice(tcgplayer){
+  if (!tcgplayer?.prices) return null;
+
+  // Priority order: holofoil variants tend to be the "main" price for
+  // most cards; normal comes after because base set normals exist too.
+  const order = ['holofoil','reverseHolofoil','normal','1stEditionHolofoil','unlimitedHolofoil'];
+  for (const key of order){
+    const p = tcgplayer.prices[key];
+    if (p?.market != null) return p.market;
+  }
+
+  // Fallback: iterate whatever variants exist and take the first with a market price
+  for (const p of Object.values(tcgplayer.prices)){
+    if (p?.market != null) return p.market;
+  }
+  return null;
+}
+
+/* fetchAndCachePrice — fetches live TCGPlayer pricing for a single binder
+   slot via the Pokémon TCG API, then writes the result back into binderState
+   and updates the price badge in the DOM without re-rendering the whole page.
+   Called lazily when a page loads and a slot is missing its price. */
+async function fetchAndCachePrice(pageIndex, slotIndex){
+  const slot = binderState.pages[pageIndex]?.[slotIndex];
+  if (!slot?.cardId) return; // nothing to fetch for an empty slot
+
+  // Grab the badge element now so we can update it after the fetch completes
+  const badgeEl = document.getElementById(`pocket-${pageIndex}-${slotIndex}`)?.querySelector('.priceBadge');
+
+  try {
+    const apiKey = binderState.apiKey || '';
+    // API key is optional — unauthenticated requests still work but are rate-limited
+    const headers = apiKey ? {'X-Api-Key': apiKey} : {};
+
+    const res = await fetch(`https://api.pokemontcg.io/v2/cards/${encodeURIComponent(slot.cardId)}`, {headers});
+    if (!res.ok) throw new Error(res.status);
+
+    const {data} = await res.json();
+
+    // Store the resolved market price and full variant breakdown on the slot
+    const price = getMarketPrice(data.tcgplayer);
+    slot.price        = price;
+    slot.priceDetails = data.tcgplayer?.prices || null; // full breakdown used in detail panel
+
+    persist(); // save updated price to Firebase / localStorage
+
+    // Update the badge in the grid without rebuilding the whole page
+    if (badgeEl){
+      badgeEl.classList.remove('loading');
+      badgeEl.textContent = price != null ? `$${price.toFixed(2)}` : '—';
+    }
+  } catch(e){
+    // On any error (network, 404, rate-limit) just show a dash — non-fatal
+    if (badgeEl){ badgeEl.classList.remove('loading'); badgeEl.textContent = '—'; }
+  }
+}
+
+/* triggerPriceFetches — called after a page renders. Loops every filled slot
+   on that page and kicks off a background price fetch for any slot that
+   doesn't already have a cached price. Fires are independent/parallel. */
+function triggerPriceFetches(pageIndex){
+  const page = binderState.pages[pageIndex] || [];
+  page.forEach((slot, slotIndex) => {
+    // Only fetch if slot has a card but hasn't been priced yet
+    if (slot && slot.cardId && slot.price == null){
+      fetchAndCachePrice(pageIndex, slotIndex);
+    }
+  });
+}
+
+let isFlipping = false;
+let flipCleanupTimer = null;
+
+function renderPage(pageIndex, direction){
+  const holder = document.getElementById('pageHolder');
+  const newFace = buildPageFaceEl(pageIndex);
+
+  if (!direction){
+    clearTimeout(flipCleanupTimer);
+    isFlipping = false;
+    holder.innerHTML = '';
+    holder.appendChild(newFace);
+    return;
+  }
+
+  // cancel any in-flight flip so old faces never stack up / overlap
+  clearTimeout(flipCleanupTimer);
+  const oldFaces = Array.from(holder.querySelectorAll('.pageFace'));
+  isFlipping = true;
+
+  newFace.style.transform = direction === 'next' ? 'rotateY(90deg)' : 'rotateY(-90deg)';
+  newFace.style.opacity = '0';
+  holder.appendChild(newFace);
+
+  requestAnimationFrame(() => {
+    oldFaces.forEach(oldFace => {
+      oldFace.style.transition = 'transform .45s ease-in, opacity .45s ease-in';
+      oldFace.style.transform = direction === 'next' ? 'rotateY(-90deg)' : 'rotateY(90deg)';
+      oldFace.style.opacity = '0';
+    });
+    newFace.style.transition = 'transform .45s ease-out .15s, opacity .3s ease-out .2s';
+    newFace.style.transform = 'rotateY(0deg)';
+    newFace.style.opacity = '1';
+  });
+
+  flipCleanupTimer = setTimeout(() => {
+    oldFaces.forEach(oldFace => {
+      if (oldFace.parentNode) oldFace.parentNode.removeChild(oldFace);
+    });
+    isFlipping = false;
+  }, 480);
+}
+
+function goNext(){
+  if (isFlipping || currentSpread >= binderState.pages.length - 1) return;
+  currentSpread++;
+  renderPage(currentSpread, 'next');
+  updateCounter();
+}
+function goPrev(){
+  if (isFlipping || currentSpread <= 0) return;
+  currentSpread--;
+  renderPage(currentSpread, 'prev');
+  updateCounter();
+}
+
+document.getElementById('nextBtn').addEventListener('click', goNext);
+document.getElementById('prevBtn').addEventListener('click', goPrev);
+
+// keyboard arrows
+document.addEventListener('keydown', (e) => {
+  if (!document.getElementById('app').classList.contains('visible')) return;
+  if (document.getElementById('overlay').classList.contains('visible')) return;
+  if (e.key === 'ArrowRight') goNext();
+  if (e.key === 'ArrowLeft') goPrev();
+});
+
+// touch swipe
+let touchStartX = null;
+document.getElementById('binderWrap').addEventListener('touchstart', (e) => {
+  touchStartX = e.touches[0].clientX;
+}, { passive: true });
+document.getElementById('binderWrap').addEventListener('touchend', (e) => {
+  if (touchStartX === null) return;
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  if (Math.abs(dx) > 50){
+    if (dx < 0) goNext(); else goPrev();
+  }
+  touchStartX = null;
+});
+
+/* ---------------------------------------------------------------------
+   POCKET CLICK -> open search (empty) or detail (filled)
+--------------------------------------------------------------------- */
+function onPocketClick(pageIndex, slotIndex){
+  const slot = binderState.pages[pageIndex][slotIndex];
+  if (slot){
+    openDetailPanel(pageIndex, slotIndex);
+  } else {
+    openSearchPanel(pageIndex, slotIndex);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   OVERLAY HELPERS
+--------------------------------------------------------------------- */
+function showOverlay(html){
+  document.getElementById('panelContent').innerHTML = html;
+  document.getElementById('overlay').classList.add('visible');
+}
+function hideOverlay(){
+  document.getElementById('overlay').classList.remove('visible');
+  pendingPickSlotRef = null;
+  activeSlotRef = null;
+}
+document.getElementById('overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'overlay') hideOverlay();
+});
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ---------------------------------------------------------------------
+   SEARCH PANEL (Pokémon TCG API)
+--------------------------------------------------------------------- */
+function openSearchPanel(pageIndex, slotIndex){
+  pendingPickSlotRef = { pageIndex, slotIndex };
+  showOverlay(`
+    <h2>Find a card</h2>
+    <input type="text" id="searchInput" placeholder="Card name, e.g. Charizard" autofocus>
+    <button class="primary" id="searchGoBtn">Search</button>
+    <button class="secondary" id="searchCancelBtn">Cancel</button>
+    <div id="resultsGrid"></div>
+  `);
+  const input = document.getElementById('searchInput');
+  input.focus();
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  document.getElementById('searchGoBtn').addEventListener('click', doSearch);
+  document.getElementById('searchCancelBtn').addEventListener('click', hideOverlay);
+}
+
+async function doSearch(){
+  const q = document.getElementById('searchInput').value.trim();
+  const resultsGrid = document.getElementById('resultsGrid');
+  if (!q){ resultsGrid.innerHTML = '<div class="emptyMsg">Type a card name to search.</div>'; return; }
+  resultsGrid.innerHTML = '<div class="loadingMsg">Searching…</div>';
+
+  try{
+    const headers = {};
+    if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+    const url = `https://api.pokemontcg.io/v2/cards?q=name:${encodeURIComponent(q)}*&pageSize=24`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error('API error ' + res.status);
+    const data = await res.json();
+    const cards = data.data || [];
+    if (cards.length === 0){
+      resultsGrid.innerHTML = '<div class="emptyMsg">No cards found.</div>';
+      return;
+    }
+    resultsGrid.innerHTML = '';
+    cards.forEach(card => {
+      const el = document.createElement('div');
+      el.className = 'resultCard';
+      el.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}"><div>${escapeHtml(card.name)}</div><div style="color:#999">${escapeHtml(card.set ? card.set.name : '')}</div>`;
+      el.addEventListener('click', () => placeCard(card));
+      resultsGrid.appendChild(el);
+    });
+  }catch(e){
+    console.warn(e);
+    resultsGrid.innerHTML = '<div class="emptyMsg">Search failed. Check your connection or API key.</div>';
+  }
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function placeCard(card){
+  if (!pendingPickSlotRef) return;
+
+  // scan-fix mode: update review data instead of writing to binder directly
+  if (pendingPickSlotRef.isScanFix){
+    const { scanSlotIndex } = pendingPickSlotRef;
+    const hash = scanReviewData[scanSlotIndex]?.hash;
+    const cellDataUrl = scanReviewData[scanSlotIndex]?.cellDataUrl;
+    scanReviewData[scanSlotIndex] = {
+      cardId: card.id,
+      name: card.name,
+      image: card.images.large || card.images.small,
+      set: card.set?.name || '',
+      confidence: 'fixed',
+      hash,
+      cellDataUrl
+    };
+    if (hash) saveCorrection(hash, {
+      cardId: card.id, name: card.name,
+      image: card.images.large || card.images.small,
+      set: card.set?.name || ''
+    });
+    pendingPickSlotRef = null;
+    openScanReviewPanel(scanPageIndex, scanReviewData);
+    toast(`Slot ${scanSlotIndex + 1} → ${card.name}`);
+    return;
+  }
+
+  const { pageIndex, slotIndex } = pendingPickSlotRef;
+  binderState.pages[pageIndex][slotIndex] = {
+    cardId: card.id,
+    name: card.name,
+    image: card.images.large || card.images.small,
+    set: card.set ? card.set.name : '',
+    owned: true,
+    quantity: 1,
+    condition: 'Near Mint',
+    notes: '',
+    price: getMarketPrice(card.tcgplayer),
+    priceDetails: card.tcgplayer?.prices ? card.tcgplayer.prices : null
+  };
+  persist();
+  hideOverlay();
+  renderPage(currentSpread, null);
+  updateSummary();
+  toast(`Added ${card.name} to the binder.`);
+}
+
+/* ---------------------------------------------------------------------
+   DETAIL PANEL (owned toggle, qty, condition, notes, remove)
+--------------------------------------------------------------------- */
+/* buildPriceSectionHTML — generates the price block shown inside the card
+   detail panel. Displays the top-level market price plus a per-variant
+   breakdown (Holofoil, Reverse Holo, Normal, etc.) and a Refresh button.
+   Returns an HTML string; injected via showOverlay so it renders as part
+   of the overlay rather than being appended separately. */
+function buildPriceSectionHTML(slot){
+  // Human-readable labels for the API's camelCase variant keys
+  const VARIANT_LABELS = {
+    normal: 'Normal', holofoil: 'Holofoil',
+    reverseHolofoil: 'Reverse Holo', '1stEditionHolofoil': '1st Ed Holo',
+    unlimitedHolofoil: 'Unlimited Holo'
+  };
+
+  // Build one row per variant that has a market price
+  let rows = '';
+  if (slot.priceDetails){
+    for (const [key, p] of Object.entries(slot.priceDetails)){
+      if (!p || p.market == null) continue; // skip variants with no market data
+      const label = VARIANT_LABELS[key] || key; // fall back to raw key if unknown variant
+      rows += `<div class="priceBreakdown"><span>${escapeHtml(label)}</span><span>$${p.market.toFixed(2)}</span></div>`;
+    }
+  }
+
+  // Show dash if price hasn't been fetched yet
+  const mainPrice = slot.price != null ? `$${Number(slot.price).toFixed(2)}` : '—';
+
+  // Wrapper id="priceSectionWrapper" lets the Refresh button replace this
+  // block in-place after re-fetching, without re-rendering the whole panel
+  return `<div id="priceSectionWrapper" class="priceSection">
+    <div class="priceMain">TCGPlayer Market: <strong>${mainPrice}</strong></div>
+    ${rows}
+    <button id="refreshPriceBtn" class="secondary" style="margin-top:6px;font-size:12px;">&#8635; Refresh Price</button>
+  </div>`;
+}
+
+function openDetailPanel(pageIndex, slotIndex){
+  activeSlotRef = { pageIndex, slotIndex };
+  const slot = binderState.pages[pageIndex][slotIndex];
+  showOverlay(`
+    <h2>${escapeHtml(slot.name)}</h2>
+    <div class="detailRow">
+      <img src="${slot.image}" alt="${escapeHtml(slot.name)}">
+      <div class="detailFields" style="flex:1">
+        <div style="color:#888; font-size:12px;">${escapeHtml(slot.set || '')}</div>
+        <label>Status</label>
+        <div class="toggleOwned">
+          <button id="ownedBtn" class="${slot.owned ? 'active owned' : ''}">Owned</button>
+          <button id="missingBtn" class="${!slot.owned ? 'active missing' : ''}">Missing</button>
+        </div>
+        <label>Quantity</label>
+        <input type="number" id="qtyInput" min="0" value="${slot.quantity || 1}">
+        <label>Condition</label>
+        <select id="condInput">
+          ${['Mint','Near Mint','Lightly Played','Moderately Played','Heavily Played','Damaged'].map(c =>
+            `<option value="${c}" ${slot.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
+        </select>
+        <label>Notes</label>
+        <textarea id="notesInput" rows="2">${escapeHtml(slot.notes || '')}</textarea>
+      </div>
+    </div>
+    ${buildPriceSectionHTML(slot)}
+    <button class="primary" id="saveDetailBtn">Save</button>
+    <button class="secondary" id="removeDetailBtn" style="background:#f3d4d4;">Remove from slot</button>
+    <div class="closeRow"><button class="secondary" id="closeDetailBtn">Close</button></div>
+  `);
+
+  document.getElementById('ownedBtn').addEventListener('click', () => setOwnedToggle(true));
+  document.getElementById('missingBtn').addEventListener('click', () => setOwnedToggle(false));
+  document.getElementById('saveDetailBtn').addEventListener('click', saveDetail);
+  document.getElementById('removeDetailBtn').addEventListener('click', removeSlot);
+  document.getElementById('closeDetailBtn').addEventListener('click', hideOverlay);
+  document.getElementById('refreshPriceBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('refreshPriceBtn');
+    btn.disabled = true; btn.textContent = '…';
+    await fetchAndCachePrice(pageIndex, slotIndex);
+    // re-render price section in-place
+    const updated = binderState.pages[pageIndex][slotIndex];
+    document.getElementById('priceSectionWrapper').outerHTML = buildPriceSectionHTML(updated);
+    document.getElementById('refreshPriceBtn').addEventListener('click', async () => {
+      await fetchAndCachePrice(pageIndex, slotIndex);
+      const u2 = binderState.pages[pageIndex][slotIndex];
+      document.getElementById('priceSectionWrapper').outerHTML = buildPriceSectionHTML(u2);
+    });
+  });
+}
+
+function setOwnedToggle(owned){
+  document.getElementById('ownedBtn').className = owned ? 'active owned' : '';
+  document.getElementById('missingBtn').className = !owned ? 'active missing' : '';
+  document.getElementById('ownedBtn').dataset.owned = owned ? '1' : '0';
+}
+
+function saveDetail(){
+  if (!activeSlotRef) return;
+  const { pageIndex, slotIndex } = activeSlotRef;
+  const slot = binderState.pages[pageIndex][slotIndex];
+  const ownedBtnActive = document.getElementById('ownedBtn').classList.contains('active');
+  slot.owned = ownedBtnActive;
+  slot.quantity = parseInt(document.getElementById('qtyInput').value, 10) || 0;
+  slot.condition = document.getElementById('condInput').value;
+  slot.notes = document.getElementById('notesInput').value;
+  persist();
+  hideOverlay();
+  renderPage(currentSpread, null);
+  updateSummary();
+  toast('Saved.');
+}
+
+function removeSlot(){
+  if (!activeSlotRef) return;
+  const { pageIndex, slotIndex } = activeSlotRef;
+  binderState.pages[pageIndex][slotIndex] = null;
+  persist();
+  hideOverlay();
+  renderPage(currentSpread, null);
+  updateSummary();
+  toast('Removed from binder.');
+}
+
+/* ---------------------------------------------------------------------
+   PAGE MANAGEMENT — add, remove, reorder
+--------------------------------------------------------------------- */
+const MAX_PAGES = 12;
+
+function addPage(){
+  if (binderState.pages.length >= MAX_PAGES){
+    toast(`Max ${MAX_PAGES} pages reached.`);
+    return;
+  }
+  const newPage = new Array(SLOTS_PER_PAGE).fill(null);
+  binderState.pages.splice(currentSpread + 1, 0, newPage);
+  currentSpread++;
+  persist();
+  renderPage(currentSpread, 'next');
+  updateCounter();
+  updateSummary();
+  toast(`Page ${currentSpread + 1} added.`);
+}
+
+function removePage(){
+  const total = binderState.pages.length;
+  if (total <= 1){ toast("Can't remove the last page."); return; }
+  const page = binderState.pages[currentSpread];
+  const hasCards = page.some(s => s !== null);
+  if (hasCards){
+    showOverlay(`
+      <h2>Remove page ${currentSpread + 1}?</h2>
+      <p style="font-size:14px;color:#555;margin:0 0 16px;">
+        This page has cards in it. Removing it will delete all ${page.filter(Boolean).length} card(s) from this page permanently.
+      </p>
+      <button class="primary" id="confirmRemoveBtn" style="background:#c0392b;">Yes, remove</button>
+      <button class="secondary" id="cancelRemoveBtn" style="margin-left:8px;">Cancel</button>
+    `);
+    document.getElementById('confirmRemoveBtn').addEventListener('click', () => {
+      doRemovePage();
+      hideOverlay();
+    });
+    document.getElementById('cancelRemoveBtn').addEventListener('click', hideOverlay);
+  } else {
+    doRemovePage();
+  }
+}
+
+function doRemovePage(){
+  binderState.pages.splice(currentSpread, 1);
+  if (currentSpread >= binderState.pages.length) currentSpread = binderState.pages.length - 1;
+  persist();
+  renderPage(currentSpread, null);
+  updateCounter();
+  updateSummary();
+  toast(`Page removed.`);
+}
+
+function movePage(direction){
+  const from = currentSpread;
+  const to = direction === 'left' ? from - 1 : from + 1;
+  if (to < 0 || to >= binderState.pages.length) return;
+  const tmp = binderState.pages[from];
+  binderState.pages[from] = binderState.pages[to];
+  binderState.pages[to] = tmp;
+  currentSpread = to;
+  persist();
+  renderPage(currentSpread, direction === 'left' ? 'prev' : 'next');
+  updateCounter();
+  toast(`Page moved ${direction === 'left' ? 'back' : 'forward'}.`);
+}
+
+document.getElementById('pageAdd').addEventListener('click', addPage);
+document.getElementById('pageRemove').addEventListener('click', removePage);
+document.getElementById('pageMoveL').addEventListener('click', () => movePage('left'));
+document.getElementById('pageMoveR').addEventListener('click', () => movePage('right'));
+
+/* =====================================================================
+   SCAN PAGE FEATURE
+   Flow: photo upload → resize → crop 9 cells → hash each cell →
+         check correction cache → call Claude vision for unknowns →
+         search TCG API for official card data → review panel →
+         user confirms / fixes → save to binder + update correction cache
+===================================================================== */
+
+let scanReviewData = [];
+let scanPageIndex = -1;
+let correctionsCache = {};
+
+// ---- file input wiring ----
+const scanFileInput = document.getElementById('scanFileInput');
+function openScanFlow(pageIndex){
+  if (!binderState.anthropicKey){
+    toast('Add your Claude API key in ⚙ Settings to use Scan Page.');
+    return;
+  }
+  scanPageIndex = pageIndex;
+  scanFileInput.value = '';
+  scanFileInput.click();
+}
+scanFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  await processScanFile(file, scanPageIndex);
+});
+
+// ---- image helpers ----
+function fileToDataUrl(file){
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+function resizeImage(dataUrl, maxSide){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      res(c.toDataURL('image/jpeg', 0.88));
+    };
+    img.src = dataUrl;
+  });
+}
+
+function cropGrid(dataUrl){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const cw = Math.floor(img.width / 3);
+      const ch = Math.floor(img.height / 3);
+      const cells = [];
+      for (let row = 0; row < 3; row++){
+        for (let col = 0; col < 3; col++){
+          const c = document.createElement('canvas');
+          c.width = cw; c.height = ch;
+          c.getContext('2d').drawImage(img, col*cw, row*ch, cw, ch, 0, 0, cw, ch);
+          cells.push(c.toDataURL('image/jpeg', 0.82));
+        }
+      }
+      res(cells);
+    };
+    img.src = dataUrl;
+  });
+}
+
+// ---- perceptual hash (dHash 8x8 = 64 bits) ----
+function computeDHash(dataUrl){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = 9; c.height = 8;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, 9, 8);
+      const d = ctx.getImageData(0, 0, 9, 8).data;
+      let hash = '';
+      for (let y = 0; y < 8; y++){
+        for (let x = 0; x < 8; x++){
+          const i = (y * 9 + x) * 4;
+          const j = (y * 9 + x + 1) * 4;
+          const gL = 0.299*d[i]   + 0.587*d[i+1] + 0.114*d[i+2];
+          const gR = 0.299*d[j]   + 0.587*d[j+1] + 0.114*d[j+2];
+          hash += gL > gR ? '1' : '0';
+        }
+      }
+      res(hash);
+    };
+    img.src = dataUrl;
+  });
+}
+
+function hashDistance(h1, h2){
+  let d = 0;
+  for (let i = 0; i < h1.length; i++) if (h1[i] !== h2[i]) d++;
+  return d;
+}
+
+// ---- correction cache (Firestore or localStorage) ----
+async function loadCorrections(){
+  if (firebaseReady){
+    try{
+      const snap = await db.collection('corrections').get();
+      snap.forEach(doc => { correctionsCache[doc.id] = doc.data(); });
+    }catch(e){ /* corrections are optional */ }
+  } else {
+    try{
+      const raw = localStorage.getItem('melanies_binder_corrections');
+      if (raw) correctionsCache = JSON.parse(raw);
+    }catch(e){}
+  }
+}
+
+async function saveCorrection(hash, cardData){
+  correctionsCache[hash] = cardData;
+  if (firebaseReady){
+    try{ await db.collection('corrections').doc(hash).set(cardData); }catch(e){}
+  } else {
+    try{ localStorage.setItem('melanies_binder_corrections', JSON.stringify(correctionsCache)); }catch(e){}
+  }
+}
+
+function lookupCorrection(hash){
+  if (correctionsCache[hash]) return { ...correctionsCache[hash], fromCache: true };
+  for (const [h, data] of Object.entries(correctionsCache)){
+    if (hashDistance(hash, h) <= 8) return { ...data, fromCache: true };
+  }
+  return null;
+}
+
+// ---- Claude vision API call ----
+async function identifyWithClaude(imageDataUrl, apiKey){
+  const base64 = imageDataUrl.split(',')[1];
+  const mediaType = imageDataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-5',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: `This is a photo of a Pokémon card binder page with a 3×3 grid of 9 card slots. Identify each card left to right, top to bottom (slot 1 = top-left, slot 9 = bottom-right).
+
+For each slot provide the Pokémon card name, set name, and card number if visible. If a slot is empty or unreadable, use name "unknown".
+
+Respond ONLY with a valid JSON array of exactly 9 objects, no other text:
+[{"slot":1,"name":"Charizard","set":"Base Set","number":"4/102","confidence":"high"},...]
+
+Use confidence "high", "medium", or "low" based on how clearly you can read the card.` }
+        ]
+      }]
+    })
+  });
+
+  if (!res.ok){
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Claude API error ${res.status}`);
+  }
+
+  const data = await res.json();
+  const text = data.content?.[0]?.text || '[]';
+  const match = text.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error("Could not parse Claude response as JSON");
+  const parsed = JSON.parse(match[0]);
+
+  const result = new Array(9).fill(null).map(() => ({ name: 'unknown', set: '', number: '', confidence: 'low' }));
+  parsed.forEach(item => {
+    const idx = (item.slot || 1) - 1;
+    if (idx >= 0 && idx < 9) result[idx] = { name: item.name || 'unknown', set: item.set || '', number: item.number || '', confidence: item.confidence || 'low' };
+  });
+  return result;
+}
+
+// ---- TCG API lookup for a guessed name+set ----
+async function searchTCGForCard(name, set){
+  try{
+    const headers = {};
+    if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+    const url = `https://api.pokemontcg.io/v2/cards?q=name:${encodeURIComponent(name)}*&pageSize=6`;
+    const res = await fetch(url, { headers });
+    const data = await res.json();
+    const cards = data.data || [];
+    if (!cards.length) return null;
+    if (set){
+      const hit = cards.find(c => c.set?.name?.toLowerCase().includes(set.toLowerCase().slice(0, 6)));
+      if (hit) return hit;
+    }
+    return cards[0];
+  }catch(e){ return null; }
+}
+
+// ---- main scan processor ----
+async function processScanFile(file, pageIndex){
+  showLoading('Reading image…');
+  try{
+    const dataUrl = await fileToDataUrl(file);
+    const resized  = await resizeImage(dataUrl, 1200);
+
+    showLoading('Cropping card slots…');
+    const cellDataUrls = await cropGrid(resized);
+    const cellHashes   = await Promise.all(cellDataUrls.map(computeDHash));
+    const cached       = cellHashes.map(lookupCorrection);
+
+    // Only call Claude for slots not in cache
+    const needAI = cached.map((c, i) => c === null ? i : -1).filter(i => i >= 0);
+    let claudeGuesses = new Array(9).fill(null).map(() => ({ name: 'unknown', set: '', confidence: 'low' }));
+
+    if (needAI.length > 0){
+      showLoading(`Identifying ${needAI.length} card${needAI.length > 1 ? 's' : ''} with Claude…`);
+      claudeGuesses = await identifyWithClaude(resized, binderState.anthropicKey);
+    }
+
+    // Merge cache + Claude results
+    showLoading('Matching official card data…');
+    const resolved = await Promise.all(cellHashes.map(async (hash, i) => {
+      const base = { hash, cellDataUrl: cellDataUrls[i], slotIndex: i };
+
+      if (cached[i]){
+        return { ...base, ...cached[i], confidence: 'cached', fromCache: true };
+      }
+
+      const guess = claudeGuesses[i];
+      if (!guess || guess.name === 'unknown'){
+        return { ...base, name: null, image: null, set: '', confidence: 'unknown' };
+      }
+
+      const card = await searchTCGForCard(guess.name, guess.set);
+      return {
+        ...base,
+        cardId: card?.id || null,
+        name: card?.name || guess.name,
+        image: card?.images?.large || card?.images?.small || null,
+        set: card?.set?.name || guess.set || '',
+        confidence: guess.confidence
+      };
+    }));
+
+    hideLoading();
+    openScanReviewPanel(pageIndex, resolved);
+
+  }catch(err){
+    hideLoading();
+    console.error(err);
+    toast('Scan failed: ' + (err.message || 'unknown error'));
+  }
+}
+
+// ---- review panel ----
+function openScanReviewPanel(pageIndex, resolved){
+  scanReviewData  = resolved;
+  scanPageIndex   = pageIndex;
+
+  showOverlay(`
+    <h2>Review scan — Page ${pageIndex + 1}</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 8px;">
+      Tap <strong>Fix</strong> on any wrong card to correct it. Corrections are saved so the same card is recognised instantly next time.
+    </p>
+    <div class="scanReviewGrid" id="scanReviewGrid"></div>
+    <button class="scanSaveAllBtn" id="scanSaveAllBtn">✓ Save to binder</button>
+    <p class="scanNote">Empty / unidentified slots are skipped.</p>
+    <div class="closeRow" style="margin-top:8px;">
+      <button class="secondary" id="scanCancelBtn">Cancel</button>
+    </div>
+  `);
+
+  const grid = document.getElementById('scanReviewGrid');
+  resolved.forEach((r, i) => {
+    const hasCard  = r.name && r.name !== 'unknown' && r.image;
+    const confLabel = r.fromCache ? 'cached' : (r.confidence || 'unknown');
+
+    const slot = document.createElement('div');
+    slot.className = 'scanSlot ' + (hasCard ? 'confirmed' : 'needs-fix');
+    slot.id = `scanSlot${i}`;
+    slot.innerHTML = `
+      <div class="scanSlotTop">
+        <img src="${hasCard ? r.image : r.cellDataUrl}" alt="slot ${i+1}"
+             onerror="this.src='${r.cellDataUrl}'">
+        <div class="scanSlotNum">${i + 1}</div>
+        <div class="confBadge ${confLabel}">${confLabel}</div>
+      </div>
+      <div class="scanSlotInfo">
+        <strong>${escapeHtml(r.name || '—')}</strong>
+        <span class="setName">${escapeHtml(r.set || 'unknown set')}</span>
+      </div>
+      <button class="scanFixBtn" data-i="${i}">Fix</button>
+    `;
+    slot.querySelector('.scanFixBtn').addEventListener('click', () => openScanFix(i));
+    grid.appendChild(slot);
+  });
+
+  document.getElementById('scanSaveAllBtn').addEventListener('click', () => commitScan(pageIndex));
+  document.getElementById('scanCancelBtn').addEventListener('click', hideOverlay);
+}
+
+// ---- fix a single slot ----
+function openScanFix(slotIndex){
+  const r = scanReviewData[slotIndex];
+  pendingPickSlotRef = { isScanFix: true, scanSlotIndex: slotIndex };
+
+  document.getElementById('panelContent').innerHTML = `
+    <div class="scanFixHeader">
+      <img src="${r.cellDataUrl}" alt="photo crop">
+      <div>
+        <h2 style="margin:0 0 3px;">Fix slot ${slotIndex + 1}</h2>
+        <p style="margin:0;font-size:12px;color:#888;">Current guess: <em>${escapeHtml(r.name || 'unknown')}</em></p>
+      </div>
+    </div>
+    <input type="text" id="searchInput" placeholder="Card name, e.g. Charizard" value="${escapeHtml(r.name && r.name !== 'unknown' ? r.name : '')}" autofocus>
+    <button class="primary" id="searchGoBtn">Search</button>
+    <button class="secondary" id="scanBackBtn">← Back</button>
+    <div id="resultsGrid"></div>
+  `;
+
+  const inp = document.getElementById('searchInput');
+  inp.focus();
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  document.getElementById('searchGoBtn').addEventListener('click', doSearch);
+  document.getElementById('scanBackBtn').addEventListener('click', () => {
+    pendingPickSlotRef = null;
+    openScanReviewPanel(scanPageIndex, scanReviewData);
+  });
+}
+
+// ---- commit all confirmed slots ----
+function commitScan(pageIndex){
+  let added = 0;
+  scanReviewData.forEach((r, slotIndex) => {
+    if (r.name && r.name !== 'unknown' && r.image){
+      binderState.pages[pageIndex][slotIndex] = {
+        cardId: r.cardId || '',
+        name: r.name,
+        image: r.image,
+        set: r.set || '',
+        owned: true,
+        quantity: 1,
+        condition: 'Near Mint',
+        notes: ''
+      };
+      added++;
+    }
+  });
+  persist();
+  hideOverlay();
+  renderPage(currentSpread, null);
+  updateSummary();
+  toast(`Saved ${added} card${added !== 1 ? 's' : ''} to page ${pageIndex + 1}.`);
+}
+
+/* ---------------------------------------------------------------------
+   SHARE FEATURE — compresses binder state into a URL fragment and opens
+   a read-only viewer page (binder-share.html) that anyone can access.
+   No login or Firebase required on the recipient's side.
+--------------------------------------------------------------------- */
+
+/* compressAndEncode — serialises an object to JSON, gzip-compresses it
+   using the Web Streams CompressionStream API, then base64-encodes the
+   result so it can be embedded in a URL hash fragment. */
+async function compressAndEncode(obj){
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  const stream = new CompressionStream('gzip');
+  const writer = stream.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const buf    = await new Response(stream.readable).arrayBuffer();
+  const arr    = new Uint8Array(buf);
+  let binary   = '';
+  arr.forEach(b => binary += String.fromCharCode(b));
+  return btoa(binary);
+}
+
+/* buildSharePayload — strips private data (API keys, verbose priceDetails)
+   from binderState and returns a clean object safe to embed in a public URL.
+   coverImage is included only when it's a URL or a small enough base64 string
+   (> 200 000 chars would make the URL too long on most platforms). */
+function buildSharePayload(){
+  const cover = binderState.coverImage;
+  return {
+    v:          1,
+    title:      "Melanie's Binder",
+    coverImage: (!cover || cover.length > 200000) ? null : cover,
+    sharedAt:   new Date().toISOString(),
+    pages: binderState.pages.map(page =>
+      page.map(slot => slot ? {
+        name:      slot.name,
+        image:     slot.image,
+        set:       slot.set      || '',
+        owned:     slot.owned,
+        quantity:  slot.quantity || 1,
+        condition: slot.condition || '',
+        price:     slot.price    ?? null
+        // stripped: cardId, notes, priceDetails, apiKey, anthropicKey
+      } : null)
+    )
+  };
+}
+
+/* shareCollection — builds the share URL and hands off to showSharePanel. */
+async function shareCollection(){
+  const btn = document.getElementById('generateShareBtn');
+  if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  try {
+    const encoded  = await compressAndEncode(buildSharePayload());
+    // binder-share.html lives in the same GitHub Pages repo
+    const base     = 'https://claudeaispam-maker.github.io/melanies-binder/binder-share.html';
+    const url      = `${base}#${encoded}`;
+    showSharePanel(url);
+  } catch(e){
+    if (btn){ btn.disabled = false; btn.textContent = 'Generate Share Link'; }
+    toast('Could not generate link: ' + (e.message || e));
+  }
+}
+
+/* showSharePanel — replaces the overlay content with the finished link
+   and auto-copies it to the clipboard. */
+function showSharePanel(url){
+  const total = binderState.pages.reduce((n,p) => n + p.filter(Boolean).length, 0);
+  const pages = binderState.pages.length;
+  showOverlay(`
+    <h2>🔗 Share Binder</h2>
+    <p style="font-size:13px;color:#555;margin:0 0 12px 0;">
+      Anyone with this link can view your full collection — read only, no login needed.
+    </p>
+    <div style="display:flex;gap:6px;align-items:stretch;">
+      <input type="text" id="shareUrlInput" value="${escapeHtml(url)}" readonly
+        style="flex:1;font-size:11px;padding:8px 10px;border:1px solid #ccc;
+               border-radius:6px;background:#f5f5f5;color:#333;outline:none;">
+      <button class="primary" id="copyShareBtn" style="white-space:nowrap;flex-shrink:0;">
+        Copy Link
+      </button>
+    </div>
+    <p style="font-size:11px;color:#aaa;margin:8px 0 0 0;">
+      Includes ${total} card${total!==1?'s':''} across ${pages} page${pages!==1?'s':''}.
+    </p>
+    <div class="closeRow"><button class="secondary" id="closeShareBtn">Close</button></div>
+  `);
+  const copyBtn = document.getElementById('copyShareBtn');
+  const copyUrl = () => {
+    navigator.clipboard.writeText(url).then(() => {
+      copyBtn.textContent = '✓ Copied!';
+      setTimeout(() => { if(copyBtn.isConnected) copyBtn.textContent = 'Copy Link'; }, 2000);
+    }).catch(() => {
+      // Fallback for browsers that block clipboard without user gesture
+      document.getElementById('shareUrlInput').select();
+    });
+  };
+  copyBtn.addEventListener('click', copyUrl);
+  copyUrl(); // auto-copy immediately when the panel opens
+  document.getElementById('closeShareBtn').addEventListener('click', hideOverlay);
+}
+
+/* ---------------------------------------------------------------------
+   SETTINGS PANEL (API key)
+--------------------------------------------------------------------- */
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  showOverlay(`
+    <h2>Settings</h2>
+    <div style="background:#eef5ff;border:1px solid #c0d8f5;border-radius:8px;padding:12px;margin-bottom:14px;">
+      <div style="font-weight:700;color:#2a5a8c;margin-bottom:4px;">🔗 Share Binder</div>
+      <p style="font-size:12px;color:#555;margin:0 0 8px 0;">
+        Generate a link anyone can open to view your full collection — read only, no login needed.
+      </p>
+      <button class="primary" id="generateShareBtn" style="width:100%;">Generate Share Link</button>
+    </div>
+    <label style="font-size:12px;color:#555;">Pokémon TCG API key (optional — raises search rate limit)</label>
+    <input type="text" id="apiKeyInput" placeholder="Paste TCG API key here" value="${escapeHtml(binderState.apiKey || '')}">
+    <p style="font-size:12px;color:#888;margin-top:4px;">
+      Get a free key at <span style="color:#555">pokemontcg.io</span>. Works without one, just rate-limited.
+    </p>
+    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+    <label style="font-size:12px;color:#555;">Claude (Anthropic) API key — <strong>required for 📷 Scan Page</strong></label>
+    <input type="text" id="anthropicKeyInput" placeholder="sk-ant-..." value="${escapeHtml(binderState.anthropicKey || '')}">
+    <p style="font-size:12px;color:#888;margin-top:4px;">
+      Get a key at <span style="color:#555">console.anthropic.com</span>. Used to identify cards from your photos (~$0.01–0.05 per page scan). Stored only in your binder data.
+    </p>
+    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+    <p style="font-size:12px;color:#888;">
+      Cloud sync: ${firebaseReady ? '<span style="color:green">✓ connected to Firebase</span>' : '<span style="color:#a55">not configured — using local storage on this device only.</span>'}
+    </p>
+    <button class="primary" id="saveSettingsBtn">Save</button>
+    <div class="closeRow"><button class="secondary" id="closeSettingsBtn">Close</button></div>
+  `);
+  document.getElementById('generateShareBtn').addEventListener('click', shareCollection);
+  document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+    binderState.apiKey = document.getElementById('apiKeyInput').value.trim();
+    binderState.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
+    persist();
+    hideOverlay();
+    toast('Settings saved.');
+  });
+  document.getElementById('closeSettingsBtn').addEventListener('click', hideOverlay);
+});
+
+</script>
+</body>
+</html>
