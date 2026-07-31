@@ -181,6 +181,13 @@
     opacity:0; transition: opacity .6s ease;
   }
   #app.visible{ display:flex; opacity:1; }
+  #app.closing{ display:flex; opacity:0; }
+  #backToCoverBtn{
+    background:rgba(0,0,0,0.4); border:none; color:#eee;
+    border-radius:20px; padding:6px 12px; cursor:pointer; font-size:13px;
+    white-space:nowrap;
+  }
+  #backToCoverBtn:hover{ background:rgba(0,0,0,0.6); }
 
   #topBar{
     position:absolute; top:0; left:0; right:0;
@@ -653,9 +660,12 @@
 <!-- ============== MAIN APP ============== -->
 <div id="app">
   <div id="topBar">
-    <div class="summary">
-      <span><span class="dot owned"></span><span id="ownedCount">0</span> owned</span>
-      <span><span class="dot missing"></span><span id="missingCount">0</span> missing</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="backToCoverBtn" title="Back to cover">← Cover</button>
+      <div class="summary">
+        <span><span class="dot owned"></span><span id="ownedCount">0</span> owned</span>
+        <span><span class="dot missing"></span><span id="missingCount">0</span> missing</span>
+      </div>
     </div>
     <div style="display:flex;align-items:center;gap:0">
       <button id="fogBtn" title="Toggle fog reveal mode">🌫 Fog</button>
@@ -904,6 +914,23 @@ document.getElementById('cover').addEventListener('click', () => {
     loadBinder();
   }, 900);
 });
+
+/* closeBinder — fades the binder app out and swings the cover back to closed */
+function closeBinder(){
+  const app   = document.getElementById('app');
+  const stage = document.getElementById('coverStage');
+  const cover = document.getElementById('cover');
+  app.classList.add('closing');
+  setTimeout(() => {
+    app.classList.remove('visible', 'closing');
+    stage.classList.remove('hide');
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      cover.classList.remove('opened');
+    }));
+  }, 600);
+}
+
+document.getElementById('backToCoverBtn').addEventListener('click', closeBinder);
 
 /* ---------------------------------------------------------------------
    RENDERING — page flip
