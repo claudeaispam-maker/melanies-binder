@@ -1870,25 +1870,34 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
 }
 
 /* openSearchPanel — search the TCG API by card name and place result in a slot.
-   Called from slot options or as a fallback when scan can't identify a card. */
-function openSearchPanel(pageIndex, slotIndex){
+   prefillName pre-fills the input and triggers an auto-search.
+   Optional set filter narrows results to a specific set. */
+function openSearchPanel(pageIndex, slotIndex, prefillName = ''){
   pendingPickSlotRef = { pageIndex, slotIndex };
   showOverlay(`
-    <h2>Find a card</h2>
-    <input type="text" id="searchInput" placeholder="Card name, e.g. Charizard" autofocus>
-    <button class="primary" id="searchGoBtn">Search</button>
-    <button class="secondary" id="searchCancelBtn">Cancel</button>
+    <h2>🔍 Find a Card</h2>
+    <input type="text" id="searchInput" placeholder="Card name, e.g. Charizard"
+           value="${escapeHtml(prefillName)}" autocorrect="off">
+    <input type="text" id="searchSetFilter" placeholder="Set filter (optional), e.g. Base Set"
+           autocorrect="off" style="margin-top:4px;font-size:13px;color:#555;">
+    <div style="display:flex;gap:8px;margin-top:6px;">
+      <button class="primary" id="searchGoBtn" style="flex:1;">Search</button>
+      <button class="secondary" id="searchCancelBtn">← Back</button>
+    </div>
     <div id="resultsGrid"></div>
   `);
   const input = document.getElementById('searchInput');
   input.focus();
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  document.getElementById('searchSetFilter').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   document.getElementById('searchGoBtn').addEventListener('click', doSearch);
-  document.getElementById('searchCancelBtn').addEventListener('click', hideOverlay);
+  document.getElementById('searchCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+  if (prefillName) doSearch();
 }
 
 async function doSearch(){
-  const q = document.getElementById('searchInput').value.trim();
+  const q         = document.getElementById('searchInput').value.trim();
+  const setFilter = (document.getElementById('searchSetFilter')?.value || '').trim();
   const resultsGrid = document.getElementById('resultsGrid');
   if (!q){ resultsGrid.innerHTML = '<div class="emptyMsg">Type a card name to search.</div>'; return; }
   resultsGrid.innerHTML = '<div class="loadingMsg">Searching…</div>';
@@ -1896,26 +1905,291 @@ async function doSearch(){
   try{
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-    const url = `https://api.pokemontcg.io/v2/cards?q=name:${encodeURIComponent(q)}*&pageSize=24`;
+    let qStr = `name:${encodeURIComponent(q)}*`;
+    if (setFilter) qStr += ` set.name:"${setFilter}"`;
+    const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(qStr)}&pageSize=30`;
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error('API error ' + res.status);
     const data = await res.json();
     const cards = data.data || [];
     if (cards.length === 0){
-      resultsGrid.innerHTML = '<div class="emptyMsg">No cards found.</div>';
+      resultsGrid.innerHTML = '<div class="emptyMsg">No cards found. Try a broader name or clear the set filter.</div>';
       return;
     }
     resultsGrid.innerHTML = '';
     cards.forEach(card => {
       const el = document.createElement('div');
       el.className = 'resultCard';
-      el.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}"><div>${escapeHtml(card.name)}</div><div style="color:#999">${escapeHtml(card.set ? card.set.name : '')}</div>`;
+      el.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
+        <div>${escapeHtml(card.name)}</div>
+        <div style="color:#999;font-size:10px;">${escapeHtml(card.set ? card.set.name : '')} #${escapeHtml(card.number||'')}</div>`;
       el.addEventListener('click', () => placeCard(card));
       resultsGrid.appendChild(el);
     });
   }catch(e){
     console.warn(e);
     resultsGrid.innerHTML = '<div class="emptyMsg">Search failed. Check your connection or API key.</div>';
+  }
+}
+
+/* openNotFoundPanel — hub shown when a card photo was scanned but the TCG API found no match. */
+function openNotFoundPanel(pageIndex, slotIndex, guess){
+  const g      = guess || {};
+  const gName  = g.name   || '';
+  const gSet   = g.set    || '';
+  const gNum   = (g.number || '').toString().split('/')[0].trim();
+
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">Card Not Found</h2>
+    <p style="font-size:12px;color:#e83;margin:0 0 10px 0;">
+      Claude read this card but the TCG API couldn't match it.
+      Correct the details and retry, or pick a different search method.
+    </p>
+    <label style="font-size:12px;color:#555;">Card Name (Claude read)</label>
+    <input type="text" id="nfName" value="${escapeHtml(gName)}" autocorrect="off"
+           placeholder="e.g. Blaine's Charmander" style="margin-bottom:6px;">
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <div style="flex:2;display:flex;flex-direction:column;">
+        <label style="font-size:12px;color:#555;">Set Name</label>
+        <input type="text" id="nfSet" value="${escapeHtml(gSet)}" autocorrect="off"
+               placeholder="e.g. Gym Challenge">
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;">
+        <label style="font-size:12px;color:#555;">Card #</label>
+        <input type="text" id="nfNum" value="${escapeHtml(gNum)}" autocorrect="off"
+               placeholder="e.g. 61">
+      </div>
+    </div>
+    <button class="primary" id="nfRetryBtn" style="width:100%;margin-bottom:10px;">🔄 Retry with These Details</button>
+    <div style="font-size:11px;color:#aaa;text-align:center;margin-bottom:8px;">— or try a different method —</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <button class="secondary" id="nfNameBtn">🔍 Search by Name</button>
+      <button class="secondary" id="nfSetNumBtn">🔢 Exact Set + #</button>
+      <button class="secondary" id="nfBrowseBtn">📦 Browse a Set</button>
+      <button class="secondary" id="nfCustomBtn">✏️ Add as Custom</button>
+    </div>
+    <div class="closeRow">
+      <button class="secondary" id="nfBackBtn">← Back to Options</button>
+    </div>
+  `);
+
+  document.getElementById('nfRetryBtn').addEventListener('click', async () => {
+    const name = document.getElementById('nfName').value.trim();
+    const set  = document.getElementById('nfSet').value.trim();
+    const num  = document.getElementById('nfNum').value.trim();
+    if (!name){ toast('Enter a card name.'); return; }
+    showLoading('Searching…');
+    const card = await searchTCGForCard(name, set, num);
+    hideLoading();
+    if (!card){ toast('Still no match — try correcting the name or number, or use another method.'); return; }
+    placeFoundCard(card, pageIndex, slotIndex);
+  });
+
+  document.getElementById('nfNameBtn').addEventListener('click', () => {
+    openSearchPanel(pageIndex, slotIndex, document.getElementById('nfName').value.trim());
+  });
+  document.getElementById('nfSetNumBtn').addEventListener('click', () => {
+    openSetNumberSearch(pageIndex, slotIndex,
+      document.getElementById('nfSet').value.trim(),
+      document.getElementById('nfNum').value.trim());
+  });
+  document.getElementById('nfBrowseBtn').addEventListener('click', () => {
+    openBrowseSetPanel(pageIndex, slotIndex, document.getElementById('nfSet').value.trim());
+  });
+  document.getElementById('nfCustomBtn').addEventListener('click', () => {
+    openCustomCardPanel(pageIndex, slotIndex, {
+      name: document.getElementById('nfName').value.trim(),
+      set:  document.getElementById('nfSet').value.trim()
+    });
+  });
+  document.getElementById('nfBackBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+}
+
+/* placeFoundCard — write a confirmed API card directly into a slot. */
+function placeFoundCard(card, pageIndex, slotIndex){
+  if (slotIndex >= 0){
+    binderState.pages[pageIndex][slotIndex] = {
+      cardId: card.id,
+      name:   card.name,
+      image:  card.images.large || card.images.small,
+      set:    card.set?.name || '',
+      owned: true, quantity: 1, condition: 'Near Mint', notes: '',
+      price:        getMarketPrice(card.tcgplayer),
+      priceDetails: card.tcgplayer?.prices || null
+    };
+    persist();
+    renderPage(currentSpread, null);
+    updateSummary();
+    hideOverlay();
+    toast(`${card.name} added to slot ${slotIndex + 1}.`);
+  } else {
+    openSlotPicker(pageIndex, card);
+  }
+}
+
+/* openSetNumberSearch — precision lookup by set name + card number. */
+function openSetNumberSearch(pageIndex, slotIndex, prefillSet = '', prefillNumber = ''){
+  pendingPickSlotRef = { pageIndex, slotIndex };
+  const pNum = prefillNumber.toString().split('/')[0].trim();
+
+  showOverlay(`
+    <h2 style="margin-bottom:6px;">🔢 Search by Set + Number</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 10px 0;">
+      Enter the set name and the number printed at the bottom-right of the card (e.g. <em>61</em> from 61/132).
+    </p>
+    <label style="font-size:12px;color:#555;">Set Name</label>
+    <input type="text" id="snsSet" value="${escapeHtml(prefillSet)}"
+           placeholder="e.g. Gym Challenge, Base Set" autocorrect="off" style="margin-bottom:6px;">
+    <label style="font-size:12px;color:#555;">Card Number</label>
+    <input type="text" id="snsNum" value="${escapeHtml(pNum)}"
+           placeholder="e.g. 61" autocorrect="off" style="margin-bottom:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:4px;">
+      <button class="primary" id="snsGoBtn" style="flex:1;">Find Card</button>
+      <button class="secondary" id="snsCancelBtn">← Back</button>
+    </div>
+    <div id="snsResults" style="margin-top:8px;"></div>
+  `);
+
+  const doSNSearch = async () => {
+    const setVal = document.getElementById('snsSet').value.trim();
+    const numVal = document.getElementById('snsNum').value.trim().split('/')[0].trim();
+    const el = document.getElementById('snsResults');
+    if (!setVal && !numVal){ toast('Enter a set name or card number.'); return; }
+    el.innerHTML = '<div class="loadingMsg">Searching…</div>';
+    try{
+      const headers = {};
+      if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+      let q = '';
+      if (setVal && numVal)  q = `set.name:"${setVal}" number:${numVal}`;
+      else if (numVal)       q = `number:${numVal}`;
+      else                   q = `set.name:"${setVal}"`;
+      const res  = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=30`, { headers });
+      const data = await res.json();
+      const cards = data.data || [];
+      if (!cards.length){
+        el.innerHTML = '<div class="emptyMsg">No match. Try checking the set name spelling.</div>';
+        return;
+      }
+      el.innerHTML = '';
+      cards.forEach(card => {
+        const div = document.createElement('div');
+        div.className = 'resultCard';
+        div.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
+          <div>${escapeHtml(card.name)}</div>
+          <div style="color:#999;font-size:10px;">${escapeHtml(card.set?.name||'')} #${escapeHtml(card.number||'')}</div>`;
+        div.addEventListener('click', () => placeCard(card));
+        el.appendChild(div);
+      });
+    }catch(e){
+      el.innerHTML = '<div class="emptyMsg">Search failed. Check your connection.</div>';
+    }
+  };
+
+  document.getElementById('snsGoBtn').addEventListener('click', doSNSearch);
+  document.getElementById('snsSet').addEventListener('keydown', (e) => { if(e.key==='Enter') doSNSearch(); });
+  document.getElementById('snsNum').addEventListener('keydown', (e) => { if(e.key==='Enter') doSNSearch(); });
+  document.getElementById('snsCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+
+  if (prefillSet && pNum) doSNSearch();
+}
+
+/* openBrowseSetPanel — search for a set → browse all its cards. */
+function openBrowseSetPanel(pageIndex, slotIndex, prefillSetName = ''){
+  pendingPickSlotRef = { pageIndex, slotIndex };
+
+  showOverlay(`
+    <h2 style="margin-bottom:6px;">📦 Browse a Set</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 8px 0;">Search for a set, then tap it to browse all its cards.</p>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <input type="text" id="setSearchInput" value="${escapeHtml(prefillSetName)}"
+             placeholder="e.g. Base Set, Gym Challenge" autocorrect="off" style="flex:1;">
+      <button class="primary" id="setSearchGoBtn">Find Sets</button>
+    </div>
+    <button class="secondary" id="setSearchCancelBtn" style="width:100%;margin-bottom:8px;">← Back</button>
+    <div id="setResultsList"></div>
+  `);
+
+  const doSetSearch = async () => {
+    const q  = document.getElementById('setSearchInput').value.trim();
+    const el = document.getElementById('setResultsList');
+    if (!q){ toast('Enter a set name to search.'); return; }
+    el.innerHTML = '<div class="loadingMsg">Searching sets…</div>';
+    try{
+      const headers = {};
+      if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+      const res  = await fetch(`https://api.pokemontcg.io/v2/sets?q=name:${encodeURIComponent(q)}*&pageSize=20`, { headers });
+      const data = await res.json();
+      const sets = (data.data || []).sort((a,b) => (b.releaseDate||'').localeCompare(a.releaseDate||''));
+      if (!sets.length){
+        el.innerHTML = '<div class="emptyMsg">No sets found. Try a shorter or different name.</div>';
+        return;
+      }
+      el.innerHTML = '';
+      sets.forEach(set => {
+        const div = document.createElement('div');
+        div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;border:1px solid #eee;border-radius:8px;margin-bottom:6px;cursor:pointer;';
+        div.innerHTML = `
+          ${set.images?.symbol ? `<img src="${set.images.symbol}" alt="" style="width:28px;height:28px;object-fit:contain;flex-shrink:0;">` : '<div style="width:28px;flex-shrink:0;"></div>'}
+          <div style="overflow:hidden;">
+            <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(set.name)}</div>
+            <div style="font-size:11px;color:#888;">${escapeHtml(set.series||'')} · ${set.total||'?'} cards${set.releaseDate ? ' · ' + escapeHtml(set.releaseDate) : ''}</div>
+          </div>`;
+        div.addEventListener('click', () => browseSetCards(set, pageIndex, slotIndex));
+        el.appendChild(div);
+      });
+    }catch(e){
+      el.innerHTML = '<div class="emptyMsg">Search failed. Check your connection.</div>';
+    }
+  };
+
+  document.getElementById('setSearchGoBtn').addEventListener('click', doSetSearch);
+  document.getElementById('setSearchInput').addEventListener('keydown', (e) => { if(e.key==='Enter') doSetSearch(); });
+  document.getElementById('setSearchCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+
+  if (prefillSetName) doSetSearch();
+}
+
+/* browseSetCards — loads and displays all cards in a set as a tappable image grid. */
+async function browseSetCards(set, pageIndex, slotIndex){
+  pendingPickSlotRef = { pageIndex, slotIndex };
+
+  showOverlay(`
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+      ${set.images?.symbol ? `<img src="${set.images.symbol}" alt="" style="width:22px;height:22px;object-fit:contain;flex-shrink:0;">` : ''}
+      <h2 style="margin:0;font-size:16px;">${escapeHtml(set.name)}</h2>
+    </div>
+    <p style="font-size:12px;color:#888;margin:0 0 8px 0;">${set.total||'?'} cards — tap one to add it to the slot.</p>
+    <button class="secondary" id="browseBackBtn" style="width:100%;margin-bottom:8px;">← Back to Sets</button>
+    <div id="browseGrid" class="resultsGrid" style="margin-top:0;"></div>
+  `);
+
+  document.getElementById('browseBackBtn').addEventListener('click', () => openBrowseSetPanel(pageIndex, slotIndex, set.name));
+
+  const el = document.getElementById('browseGrid');
+  el.innerHTML = '<div class="loadingMsg">Loading cards…</div>';
+
+  try{
+    const headers = {};
+    if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+    const res  = await fetch(
+      `https://api.pokemontcg.io/v2/cards?q=set.id:${encodeURIComponent(set.id)}&pageSize=250&orderBy=number`,
+      { headers }
+    );
+    const data = await res.json();
+    const cards = data.data || [];
+    if (!cards.length){ el.innerHTML = '<div class="emptyMsg">No cards found in this set.</div>'; return; }
+    el.innerHTML = '';
+    cards.forEach(card => {
+      const div = document.createElement('div');
+      div.className = 'resultCard';
+      div.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
+        <div>${escapeHtml(card.name)}</div>
+        <div style="color:#999;font-size:10px;">#${escapeHtml(card.number||'')}</div>`;
+      div.addEventListener('click', () => placeCard(card));
+      el.appendChild(div);
+    });
+  }catch(e){
+    el.innerHTML = '<div class="emptyMsg">Failed to load cards. Check your connection.</div>';
   }
 }
 
@@ -1952,6 +2226,7 @@ function placeCard(card){
   }
 
   const { pageIndex, slotIndex } = pendingPickSlotRef;
+  if (slotIndex < 0){ pendingPickSlotRef = null; openSlotPicker(pageIndex, card); return; }
   binderState.pages[pageIndex][slotIndex] = {
     cardId: card.id,
     name: card.name,
@@ -2552,8 +2827,7 @@ async function processSingleCardFile(file, pageIndex, slotIndex){
     hideLoading();
 
     if (!card){
-      toast(`Saw "${guess.name}" but no API match — search manually.`);
-      openSearchPanel(pageIndex, slotIndex);
+      openNotFoundPanel(pageIndex, slotIndex, guess);
       return;
     }
 
