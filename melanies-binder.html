@@ -1920,7 +1920,7 @@ async function doSearch(){
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
     let qStr = `name:${encodeURIComponent(q)}*`;
-    if (setFilter) qStr += ` set.name:"${setFilter}"`;
+    if (setFilter) qStr += ` ${setNameQ(setFilter)}`;
     const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(qStr)}&pageSize=30`;
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error('API error ' + res.status);
@@ -2054,13 +2054,13 @@ function openNotFoundPanel(pageIndex, slotIndex, guess){
 
     let card = null;
 
-    if (name && num && set)     card = await tryQ(`name:"${name}" number:${num} set.name:"${set}"`);
+    if (name && num && set)     card = await tryQ(`name:"${name}" number:${num} ${setNameQ(set)}`);
     if (!card && name && num)   card = await tryQ(`name:"${name}" number:${num}`);
     if (!card && artist && num) card = await tryQ(`artist:"${artist}" number:${num}`);
-    if (!card && name && set && hp)    card = await tryQ(`name:"${name}" set.name:"${set}" hp:${hp}`);
+    if (!card && name && set && hp)    card = await tryQ(`name:"${name}" ${setNameQ(set)} hp:${hp}`);
     if (!card && name && hp && rarity) card = await tryQ(`name:"${name}"* hp:${hp} rarity:"${rarity}"`);
-    if (!card && artist && set) card = await tryQ(`artist:"${artist}" set.name:"${set}"`);
-    if (!card && name && subtypes && set) card = await tryQ(`name:"${name}"* subtypes:"${subtypes}" set.name:"${set}"`);
+    if (!card && artist && set) card = await tryQ(`artist:"${artist}" ${setNameQ(set)}`);
+    if (!card && name && subtypes && set) card = await tryQ(`name:"${name}"* subtypes:"${subtypes}" ${setNameQ(set)}`);
     if (!card && name) card = await searchTCGForCard(name, set, num, { artist, hp });
 
     hideLoading();
@@ -2143,9 +2143,9 @@ function openSetNumberSearch(pageIndex, slotIndex, prefillSet = '', prefillNumbe
       const headers = {};
       if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
       let q = '';
-      if (setVal && numVal)  q = `set.name:"${setVal}" number:${numVal}`;
+      if (setVal && numVal)  q = `${setNameQ(setVal)} number:${numVal}`;
       else if (numVal)       q = `number:${numVal}`;
-      else                   q = `set.name:"${setVal}"`;
+      else                   q = setNameQ(setVal);
       const res  = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=30`, { headers });
       const data = await res.json();
       const cards = data.data || [];
@@ -2200,7 +2200,8 @@ function openBrowseSetPanel(pageIndex, slotIndex, prefillSetName = ''){
     try{
       const headers = {};
       if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-      const res  = await fetch(`https://api.pokemontcg.io/v2/sets?q=name:${encodeURIComponent(q)}*&pageSize=20`, { headers });
+      const setQ = /mcdonald/i.test(q) ? `name:McDonald*` : `name:${encodeURIComponent(q)}*`;
+      const res  = await fetch(`https://api.pokemontcg.io/v2/sets?q=${setQ}&pageSize=20`, { headers });
       const data = await res.json();
       const sets = (data.data || []).sort((a,b) => (b.releaseDate||'').localeCompare(a.releaseDate||''));
       if (!sets.length){
@@ -2278,6 +2279,15 @@ async function browseSetCards(set, pageIndex, slotIndex){
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Returns a safe set.name query fragment. McDonald's sets use a wildcard because
+// the apostrophe breaks Lucene quoted string queries in the TCG API.
+function setNameQ(setName){
+  if (!setName) return '';
+  return /mcdonald/i.test(setName)
+    ? 'set.name:McDonald*'
+    : `set.name:"${setName}"`;
 }
 
 function placeCard(card){
@@ -2865,7 +2875,7 @@ async function identifySingleCard(imageDataUrl, apiKey){
 
 1. NAME — full card name including any trainer prefix (e.g. "Blaine's Charmander", "Team Rocket's Mewtwo")
 2. NUMBER — exactly as printed bottom-right (e.g. "61/132", "SWSH001", "TG01/TG30")
-3. SET — set name from the logo/symbol/text (e.g. "Gym Challenge", "Base Set", "Scarlet & Violet")
+3. SET — set name from the logo/symbol/text (e.g. "Gym Challenge", "Base Set", "Scarlet & Violet"). If the card shows a golden arches / McDonald's M symbol, set SET to "McDonald's Collection" followed by the year if visible (e.g. "McDonald's Collection 2021")
 4. RARITY — bottom symbol: circle=Common, diamond=Uncommon, star=Rare, star+sparkle=Holo Rare, 2stars=Ultra Rare
 5. HP — HP number if Pokémon (e.g. "70"), empty string if Trainer or Energy
 6. SUPERTYPE — exactly one of: "Pokémon", "Trainer", "Energy"
@@ -3032,9 +3042,20 @@ async function searchTCGForCard(name, set, number, meta = {}){
       const d = await r.json(); return d.data || [];
     };
 
+    // --- McDonald's early pass — apostrophes break quoted set.name queries ---
+    // set.name:McDonald* matches all years (2011 / 2012 / 2019 / 2021 / 2022 / 2023 …)
+    if (set && /mcdonald/i.test(set)){
+      if (numOnly){
+        const d = await tf(`name:"${name}" number:${numOnly} set.name:McDonald*`, 6);
+        if (d.length) return d[0];
+      }
+      const d2 = await tf(`name:${encodeURIComponent(name)}* set.name:McDonald*`, 10);
+      if (d2.length) return d2[0];
+    }
+
     // --- Pass 1: name + number + set (all three — most precise) ---
     if (numOnly && set){
-      const d = await tf(`name:"${name}" number:${numOnly} set.name:"${set}"`, 4);
+      const d = await tf(`name:"${name}" number:${numOnly} ${setNameQ(set)}`, 4);
       if (d.length) return d[0];
     }
 
@@ -3055,7 +3076,7 @@ async function searchTCGForCard(name, set, number, meta = {}){
 
     // --- Pass 4: name + set ---
     if (set){
-      const d = await tf(`name:${encodeURIComponent(name)}* set.name:"${set}"`, 6);
+      const d = await tf(`name:${encodeURIComponent(name)}* ${setNameQ(set)}`, 6);
       if (d.length) return d[0];
     }
 
@@ -3079,7 +3100,7 @@ async function searchTCGForCard(name, set, number, meta = {}){
 
     // --- Pass 7: name + HP + set (alternative when number is unreadable) ---
     if (set && meta.hp){
-      const d = await tf(`name:${encodeURIComponent(name)}* hp:${meta.hp} set.name:"${set}"`, 6);
+      const d = await tf(`name:${encodeURIComponent(name)}* hp:${meta.hp} ${setNameQ(set)}`, 6);
       if (d.length) return d[0];
     }
 
