@@ -2200,12 +2200,33 @@ function openBrowseSetPanel(pageIndex, slotIndex, prefillSetName = ''){
     try{
       const headers = {};
       if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-      const setQ = /mcdonald/i.test(q) ? `name:McDonald*` : `name:${encodeURIComponent(q)}*`;
-      const res  = await fetch(`https://api.pokemontcg.io/v2/sets?q=${setQ}&pageSize=20`, { headers });
-      const data = await res.json();
-      const sets = (data.data || []).sort((a,b) => (b.releaseDate||'').localeCompare(a.releaseDate||''));
+      const fetchSets = async (luceneQ) => {
+        const r = await fetch(`https://api.pokemontcg.io/v2/sets?q=${encodeURIComponent(luceneQ)}&pageSize=20`, { headers });
+        const d = await r.json(); return d.data || [];
+      };
+      const seen = new Set(); let sets = [];
+      const merge = arr => arr.forEach(s => { if (!seen.has(s.id)){ seen.add(s.id); sets.push(s); } });
+
+      if (/mcdonald/i.test(q)){
+        merge(await fetchSets('name:McDonald*'));
+      } else {
+        // Short alphanumeric = likely a set code (SSP, PAF, OBF, etc.)
+        if (q.length <= 5 && /^[A-Za-z0-9]+$/.test(q)){
+          merge(await fetchSets(`ptcgoCode:${q.toUpperCase()}`));
+        }
+        if (!sets.length){
+          // Quoted phrase for multi-word names; wildcard prefix for single word
+          const nameQ = q.includes(' ') ? `name:"${q}"` : `name:${q}*`;
+          merge(await fetchSets(nameQ));
+        }
+        // Fallback: first-word wildcard (catches partial / abbreviated multi-word names)
+        if (!sets.length){
+          merge(await fetchSets(`name:${q.split(' ')[0]}*`));
+        }
+      }
+      sets.sort((a,b) => (b.releaseDate||'').localeCompare(a.releaseDate||''));
       if (!sets.length){
-        el.innerHTML = '<div class="emptyMsg">No sets found. Try a shorter or different name.</div>';
+        el.innerHTML = '<div class="emptyMsg">No sets found. Try the full name, first word, or set code (e.g. SSP for Surging Sparks).</div>';
         return;
       }
       el.innerHTML = '';
