@@ -630,6 +630,33 @@
   .scanNote{ font-size:11px; color:#aaa; margin:5px 0 0; text-align:center; }
   .scanFixHeader{ display:flex; align-items:center; gap:12px; margin-bottom:12px; }
   .scanFixHeader img{ width:64px; border-radius:6px; border:1px solid #ddd; flex-shrink:0; }
+
+  /* Slot picker — shown after single-card scan to choose where to place the card */
+  .slotPickerCard{
+    display:flex; align-items:center; gap:12px;
+    background:#f3eaff; border-radius:10px; padding:10px; margin-bottom:12px;
+  }
+  .slotPickerCard img{ width:64px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.2); flex-shrink:0; }
+  .slotPickerGrid{
+    display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:4px;
+  }
+  .slotPickerCell{
+    position:relative; border-radius:8px; border:2px solid #ddd;
+    aspect-ratio:2/3; overflow:hidden; cursor:pointer; background:#f5eeff;
+    display:flex; align-items:center; justify-content:center; flex-direction:column;
+    font-size:11px; color:#999; transition:border-color .15s, transform .12s;
+  }
+  .slotPickerCell.empty{ border-color:#c89fff; background:#ede0ff; }
+  .slotPickerCell.empty:hover{ border-color:#8830e8; transform:scale(1.05); background:#d8b8ff; }
+  .slotPickerCell.filled{ border-color:#ccc; cursor:not-allowed; opacity:.7; }
+  .slotPickerCell img{ width:100%; height:100%; object-fit:cover; }
+  .slotPickerNum{
+    position:absolute; top:3px; left:4px;
+    background:rgba(0,0,0,0.55); color:#fff;
+    font-size:10px; font-weight:700; border-radius:4px; padding:1px 4px; line-height:1.4;
+    pointer-events:none;
+  }
+  .slotPickerCell.empty:hover .slotPickerNum{ background:#8830e8; }
 </style>
 </head>
 <body>
@@ -728,8 +755,8 @@
 
 <div id="toast"></div>
 
-<!-- hidden file input for scan — accept camera or gallery -->
-<input type="file" id="scanFileInput" accept="image/*" capture="environment" style="display:none">
+<!-- hidden file input for scan — no capture attr so iOS shows "Take Photo / Choose from Library" -->
+<input type="file" id="scanFileInput" accept="image/*" style="display:none">
 
 <script>
 /* =====================================================================
@@ -1343,8 +1370,9 @@ function buildPageFaceEl(pageIndex){
   labelSpan.textContent = `— Page ${pageIndex+1} —`;
   const scanBtn = document.createElement('button');
   scanBtn.className = 'scanPageBtn';
-  scanBtn.textContent = '📷 Scan Page';
-  scanBtn.addEventListener('click', (e) => { e.stopPropagation(); openScanFlow(pageIndex); });
+  scanBtn.textContent = '📷 Scan Card';
+  // page-level scan: no slot pre-selected — show slot picker after identification
+  scanBtn.addEventListener('click', (e) => { e.stopPropagation(); openSingleCardScan(pageIndex, -1); });
   header.appendChild(labelSpan);
   header.appendChild(scanBtn);
   const grid = document.createElement('div');
@@ -1578,7 +1606,7 @@ function onPocketClick(pageIndex, slotIndex){
   if (slot){
     openDetailPanel(pageIndex, slotIndex);
   } else {
-    openSearchPanel(pageIndex, slotIndex);
+    openSlotOptions(pageIndex, slotIndex); // empty slot → show add-card options
   }
 }
 
@@ -1608,6 +1636,241 @@ function toast(msg){
 /* ---------------------------------------------------------------------
    SEARCH PANEL (Pokémon TCG API)
 --------------------------------------------------------------------- */
+/* openSlotOptions — shown when tapping an empty slot.
+   Three paths: scan via API, search via API, or add a fully custom card with no API at all. */
+function openSlotOptions(pageIndex, slotIndex){
+  const hasScanKey = !!binderState.anthropicKey;
+  const slotLabel = slotIndex + 1;
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">Slot ${slotLabel} — Add a card</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 14px;">Page ${pageIndex + 1} · slot ${slotLabel} of 9</p>
+    ${hasScanKey ? `
+    <button class="primary" id="scanSlotBtn" style="width:100%;padding:13px;font-size:14px;margin-bottom:8px;">
+      📷 Upload or Scan Card
+    </button>` : ''}
+    <button class="secondary" id="searchSlotBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
+      🔍 Search by card name
+    </button>
+    <button class="secondary" id="customSlotBtn" style="width:100%;padding:11px;font-size:14px;">
+      ✏️ Add Custom Card (no API needed)
+    </button>
+    <div class="closeRow" style="margin-top:12px;">
+      <button class="secondary" id="slotOptsCancelBtn">Cancel</button>
+    </div>
+  `);
+  document.getElementById('slotOptsCancelBtn').addEventListener('click', hideOverlay);
+  document.getElementById('searchSlotBtn').addEventListener('click', () => openSearchPanel(pageIndex, slotIndex));
+  document.getElementById('customSlotBtn').addEventListener('click', () => openCustomCardPanel(pageIndex, slotIndex));
+  if (hasScanKey){
+    document.getElementById('scanSlotBtn').addEventListener('click', () => {
+      hideOverlay();
+      openSingleCardScan(pageIndex, slotIndex);
+    });
+  }
+}
+
+/* openImageCropper — canvas-based pan/zoom editor for a photo before saving to a slot.
+   Draws the image on a card-shaped canvas; user drags to pan and pinches/scrolls to zoom.
+   Image always fills the canvas (no black bars). Calls onConfirm(dataUrl) or onCancel(). */
+function openImageCropper(imageDataUrl, onConfirm, onCancel){
+  const CW = 260, CH = 364; // card aspect ratio 5:7 at display resolution
+
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">Crop & Center</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 8px 0;">Drag to move · Pinch or slide to zoom</p>
+    <canvas id="cropCanvas" width="${CW}" height="${CH}"
+      style="display:block;border-radius:10px;border:2px solid #ddd;touch-action:none;
+             cursor:grab;background:#222;max-width:100%;margin:0 auto;box-shadow:0 4px 16px rgba(0,0,0,0.25);">
+    </canvas>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+      <span style="font-size:13px;">−</span>
+      <input type="range" id="zoomSlider" min="100" max="400" step="1" value="100"
+        style="flex:1;height:4px;accent-color:#9b59b6;">
+      <span style="font-size:13px;">+</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="secondary" id="cropResetBtn" style="flex:1;">↺ Fit</button>
+      <button class="primary" id="cropConfirmBtn" style="flex:2;">✓ Use This</button>
+    </div>
+    <div class="closeRow" style="margin-top:8px;">
+      <button class="secondary" id="cropCancelBtn">← Cancel</button>
+    </div>
+  `);
+
+  const canvas = document.getElementById('cropCanvas');
+  const ctx    = canvas.getContext('2d');
+  const img    = new Image();
+  let scale = 1, minScale = 1;
+  let ox = 0, oy = 0;
+
+  function clamp(){
+    ox = Math.min(0, Math.max(CW - img.width  * scale, ox));
+    oy = Math.min(0, Math.max(CH - img.height * scale, oy));
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, CW, CH);
+    ctx.drawImage(img, ox, oy, img.width * scale, img.height * scale);
+  }
+
+  function applyScale(newScale, pivotX, pivotY){
+    newScale = Math.max(minScale, Math.min(minScale * 4, newScale));
+    const ratio = newScale / scale;
+    ox = pivotX + (ox - pivotX) * ratio;
+    oy = pivotY + (oy - pivotY) * ratio;
+    scale = newScale;
+    clamp(); draw();
+    document.getElementById('zoomSlider').value = Math.round(scale / minScale * 100);
+  }
+
+  function resetFit(){
+    minScale = Math.max(CW / img.width, CH / img.height);
+    scale    = minScale;
+    ox = (CW - img.width  * scale) / 2;
+    oy = (CH - img.height * scale) / 2;
+    clamp(); draw();
+    const sl = document.getElementById('zoomSlider');
+    if (sl) sl.value = 100;
+  }
+
+  img.onload = resetFit;
+  img.src    = imageDataUrl;
+
+  document.getElementById('zoomSlider').addEventListener('input', (e) => {
+    applyScale(minScale * (parseInt(e.target.value) / 100), CW / 2, CH / 2);
+  });
+  document.getElementById('cropResetBtn').addEventListener('click', resetFit);
+
+  let dragging = false, lastMX = 0, lastMY = 0;
+  canvas.addEventListener('mousedown', (e) => {
+    dragging = true; lastMX = e.clientX; lastMY = e.clientY;
+    canvas.style.cursor = 'grabbing'; e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    ox += e.clientX - lastMX; oy += e.clientY - lastMY;
+    lastMX = e.clientX; lastMY = e.clientY;
+    clamp(); draw();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; canvas.style.cursor = 'grab'; });
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    applyScale(scale * (e.deltaY < 0 ? 1.1 : 0.9), e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive: false });
+
+  let lastTouches = [];
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault(); lastTouches = Array.from(e.touches);
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const touches = Array.from(e.touches);
+    const rect    = canvas.getBoundingClientRect();
+    if (touches.length === 1 && lastTouches.length >= 1){
+      ox += touches[0].clientX - lastTouches[0].clientX;
+      oy += touches[0].clientY - lastTouches[0].clientY;
+      clamp(); draw();
+    } else if (touches.length === 2 && lastTouches.length >= 2){
+      const prevD = Math.hypot(lastTouches[0].clientX - lastTouches[1].clientX,
+                               lastTouches[0].clientY - lastTouches[1].clientY);
+      const newD  = Math.hypot(touches[0].clientX - touches[1].clientX,
+                               touches[0].clientY - touches[1].clientY);
+      const midX  = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
+      const midY  = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
+      const pmidX = (lastTouches[0].clientX + lastTouches[1].clientX) / 2 - rect.left;
+      const pmidY = (lastTouches[0].clientY + lastTouches[1].clientY) / 2 - rect.top;
+      ox += midX - pmidX; oy += midY - pmidY;
+      applyScale(scale * (newD / prevD), midX, midY);
+    }
+    lastTouches = touches;
+  }, { passive: false });
+
+  document.getElementById('cropConfirmBtn').addEventListener('click', () => {
+    onConfirm(canvas.toDataURL('image/jpeg', 0.92));
+  });
+  document.getElementById('cropCancelBtn').addEventListener('click', onCancel);
+}
+
+/* openCustomCardPanel — lets the user enter a card name, set, and upload their own image.
+   No API calls at all — useful for custom, fan-made, or unlisted cards.
+   prefill = {name, set, image} allows re-opening after the crop editor with state intact. */
+function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
+  const preName  = prefill.name  || '';
+  const preSet   = prefill.set   || '';
+  const preImage = prefill.image || null;
+
+  showOverlay(`
+    <h2 style="margin-bottom:8px;">✏️ Custom Card — Slot ${slotIndex + 1}</h2>
+    <label style="font-size:12px;color:#555;">Card Name <span style="color:#c55;">*</span></label>
+    <input type="text" id="customName" placeholder="e.g. Shadow Charizard" autocorrect="off"
+           value="${preName.replace(/"/g,'&quot;')}" style="margin-bottom:8px;">
+    <label style="font-size:12px;color:#555;">Set / Series (optional)</label>
+    <input type="text" id="customSet" placeholder="e.g. Fan Set, Custom 2024" autocorrect="off"
+           value="${preSet.replace(/"/g,'&quot;')}" style="margin-bottom:8px;">
+    <label style="font-size:12px;color:#555;">Card Image (optional)</label>
+    <button class="secondary" id="customImgBtn" style="width:100%;margin-bottom:4px;">
+      ${preImage ? '📁 Change Image' : '📁 Choose & Crop Image'}
+    </button>
+    <div id="customImgPreview" style="text-align:center;margin-bottom:8px;">
+      ${preImage ? `<img src="${preImage}" style="max-height:120px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.2);">` : ''}
+    </div>
+    <button class="primary" id="customSaveBtn" style="width:100%;margin-top:4px;">Save to Slot</button>
+    <div class="closeRow" style="margin-top:8px;">
+      <button class="secondary" id="customCancelBtn">← Back</button>
+    </div>
+  `);
+
+  let customImageDataUrl = preImage;
+
+  document.getElementById('customCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+
+  document.getElementById('customImgBtn').addEventListener('click', () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', async () => {
+      const file = inp.files[0];
+      document.body.removeChild(inp);
+      if (!file) return;
+      const rawUrl = await fileToDataUrl(file);
+      const snapName = document.getElementById('customName').value;
+      const snapSet  = document.getElementById('customSet').value;
+      openImageCropper(
+        rawUrl,
+        (croppedUrl) => openCustomCardPanel(pageIndex, slotIndex, { name: snapName, set: snapSet, image: croppedUrl }),
+        ()           => openCustomCardPanel(pageIndex, slotIndex, { name: snapName, set: snapSet, image: customImageDataUrl })
+      );
+    });
+    inp.click();
+  });
+
+  document.getElementById('customSaveBtn').addEventListener('click', () => {
+    const name = document.getElementById('customName').value.trim();
+    if (!name){ toast('Enter a card name.'); return; }
+    const set  = document.getElementById('customSet').value.trim();
+    binderState.pages[pageIndex][slotIndex] = {
+      cardId: '',
+      name,
+      image: customImageDataUrl || '',
+      set,
+      owned: true,
+      quantity: 1,
+      condition: 'Near Mint',
+      notes: 'Custom card'
+    };
+    persist();
+    renderPage(currentSpread, null);
+    updateSummary();
+    hideOverlay();
+    toast(`${name} added to slot ${slotIndex + 1}.`);
+  });
+}
+
+/* openSearchPanel — search the TCG API by card name and place result in a slot.
+   Called from slot options or as a fallback when scan can't identify a card. */
 function openSearchPanel(pageIndex, slotIndex){
   pendingPickSlotRef = { pageIndex, slotIndex };
   showOverlay(`
@@ -1773,6 +2036,7 @@ function openDetailPanel(pageIndex, slotIndex){
     </div>
     ${buildPriceSectionHTML(slot)}
     <button class="primary" id="saveDetailBtn">Save</button>
+    <button class="secondary" id="moveCardBtn">↕ Move / Swap</button>
     <button class="secondary" id="removeDetailBtn" style="background:#f3d4d4;">Remove from slot</button>
     <div class="closeRow"><button class="secondary" id="closeDetailBtn">Close</button></div>
   `);
@@ -1780,6 +2044,7 @@ function openDetailPanel(pageIndex, slotIndex){
   document.getElementById('ownedBtn').addEventListener('click', () => setOwnedToggle(true));
   document.getElementById('missingBtn').addEventListener('click', () => setOwnedToggle(false));
   document.getElementById('saveDetailBtn').addEventListener('click', saveDetail);
+  document.getElementById('moveCardBtn').addEventListener('click', () => openMovePanel(pageIndex, slotIndex));
   document.getElementById('removeDetailBtn').addEventListener('click', removeSlot);
   document.getElementById('closeDetailBtn').addEventListener('click', hideOverlay);
   document.getElementById('refreshPriceBtn').addEventListener('click', async () => {
@@ -1828,6 +2093,105 @@ function removeSlot(){
   renderPage(currentSpread, null);
   updateSummary();
   toast('Removed from binder.');
+}
+
+/* ---------------------------------------------------------------------
+   MOVE / SWAP — relocate a card to any slot on any page.
+   Empty slot = move card there. Filled slot = swap the two cards.
+   Prev/Next buttons let you navigate pages without closing the panel.
+--------------------------------------------------------------------- */
+function openMovePanel(fromPage, fromSlot, viewPage){
+  if (viewPage === undefined) viewPage = fromPage;
+  const card = binderState.pages[fromPage][fromSlot];
+  if (!card) return;
+  const page = binderState.pages[viewPage];
+  const totalPages = binderState.pages.length;
+
+  let cellsHtml = '';
+  for (let i = 0; i < 9; i++){
+    const existing = page[i];
+    const isSelf = (viewPage === fromPage && i === fromSlot);
+    const label = i + 1;
+    if (isSelf){
+      cellsHtml += `
+        <div class="slotPickerCell" style="border-color:#f90;background:#fff8e0;cursor:default;" title="Current position">
+          <span class="slotPickerNum">${label}</span>
+          ${card.image ? `<img src="${card.image}" alt="${escapeHtml(card.name)}" style="opacity:.5;">` : ''}
+          <span style="font-size:9px;color:#f90;margin-top:2px;">here</span>
+        </div>`;
+    } else if (existing){
+      cellsHtml += `
+        <div class="slotPickerCell filled" data-action="swap" data-topage="${viewPage}" data-toslot="${i}"
+             style="cursor:pointer;opacity:1;border-color:#b8a0ff;"
+             title="Swap with: ${escapeHtml(existing.name)}">
+          <span class="slotPickerNum">${label}</span>
+          ${existing.image ? `<img src="${existing.image}" alt="${escapeHtml(existing.name)}">` : ''}
+          <span style="position:absolute;bottom:3px;left:0;right:0;text-align:center;font-size:8px;color:#fff;background:rgba(0,0,0,.45);padding:1px 0;">swap</span>
+        </div>`;
+    } else {
+      cellsHtml += `
+        <div class="slotPickerCell empty" data-action="move" data-topage="${viewPage}" data-toslot="${i}"
+             title="Move to slot ${label}">
+          <span class="slotPickerNum">${label}</span>
+          <span style="font-size:18px;margin-top:4px;">+</span>
+          <span style="font-size:10px;margin-top:2px;">move here</span>
+        </div>`;
+    }
+  }
+
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">↕ Move / Swap</h2>
+    <div class="slotPickerCard" style="margin-bottom:10px;">
+      ${card.image ? `<img src="${card.image}" alt="${escapeHtml(card.name)}">` : ''}
+      <div>
+        <strong>${escapeHtml(card.name)}</strong>
+        <div style="font-size:12px;color:#888;">${escapeHtml(card.set||'')}</div>
+        <div style="font-size:11px;color:#aaa;margin-top:4px;">From page ${fromPage+1}, slot ${fromSlot+1}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+      <button class="secondary" id="movePrevPage" ${viewPage===0?'disabled':''} style="padding:4px 10px;">◀</button>
+      <span style="font-size:13px;font-weight:600;">Page ${viewPage+1} of ${totalPages}</span>
+      <button class="secondary" id="moveNextPage" ${viewPage===totalPages-1?'disabled':''} style="padding:4px 10px;">▶</button>
+    </div>
+    <div class="slotPickerGrid">${cellsHtml}</div>
+    <p style="font-size:11px;color:#aaa;text-align:center;margin:6px 0 0;">
+      Tap <strong style="color:#4a8;">+</strong> to move · Tap a card to swap
+    </p>
+    <div class="closeRow" style="margin-top:10px;">
+      <button class="secondary" id="moveCancelBtn">Cancel</button>
+    </div>
+  `);
+
+  document.getElementById('moveCancelBtn').addEventListener('click', hideOverlay);
+  document.getElementById('movePrevPage').addEventListener('click', () => openMovePanel(fromPage, fromSlot, viewPage - 1));
+  document.getElementById('moveNextPage').addEventListener('click', () => openMovePanel(fromPage, fromSlot, viewPage + 1));
+
+  document.querySelectorAll('[data-action]').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const toPage = parseInt(cell.dataset.topage);
+      const toSlot = parseInt(cell.dataset.toslot);
+      const action = cell.dataset.action;
+      if (action === 'move'){
+        binderState.pages[toPage][toSlot] = binderState.pages[fromPage][fromSlot];
+        binderState.pages[fromPage][fromSlot] = null;
+        persist();
+        renderPage(currentSpread, null);
+        updateSummary();
+        hideOverlay();
+        toast(`${card.name} moved to page ${toPage+1}, slot ${toSlot+1}.`);
+      } else {
+        const temp = binderState.pages[toPage][toSlot];
+        binderState.pages[toPage][toSlot] = binderState.pages[fromPage][fromSlot];
+        binderState.pages[fromPage][fromSlot] = temp;
+        persist();
+        renderPage(currentSpread, null);
+        updateSummary();
+        hideOverlay();
+        toast(`Swapped ${card.name} ↔ ${temp.name}.`);
+      }
+    });
+  });
 }
 
 /* ---------------------------------------------------------------------
@@ -1914,6 +2278,8 @@ document.getElementById('pageMoveR').addEventListener('click', () => movePage('r
 let scanReviewData = [];
 let scanPageIndex = -1;
 let correctionsCache = {};
+// singleScanRef: set when scanning one card into one slot; null for full-page scan mode
+let singleScanRef = null;
 
 // ---- file input wiring ----
 const scanFileInput = document.getElementById('scanFileInput');
@@ -1923,13 +2289,34 @@ function openScanFlow(pageIndex){
     return;
   }
   scanPageIndex = pageIndex;
+  singleScanRef = null; // full-page mode
   scanFileInput.value = '';
   scanFileInput.click();
 }
+
+// openSingleCardScan — tap a slot → take/upload one card photo → fills that slot only
+function openSingleCardScan(pageIndex, slotIndex){
+  if (!binderState.anthropicKey){
+    toast('Add your Claude API key in ⚙ Settings to use card scanning.');
+    return;
+  }
+  singleScanRef = { pageIndex, slotIndex }; // remember which slot to fill
+  scanFileInput.value = '';
+  scanFileInput.click();
+}
+
 scanFileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  await processScanFile(file, scanPageIndex);
+  if (singleScanRef){
+    // Single-card mode: identify one card and drop it straight into one slot
+    const { pageIndex, slotIndex } = singleScanRef;
+    singleScanRef = null;
+    await processSingleCardFile(file, pageIndex, slotIndex);
+  } else {
+    // Full-page mode: crop 3×3 grid and identify all 9 slots at once
+    await processScanFile(file, scanPageIndex);
+  }
 });
 
 // ---- image helpers ----
@@ -2095,18 +2482,234 @@ Use confidence "high", "medium", or "low" based on how clearly you can read the 
   return result;
 }
 
-// ---- TCG API lookup for a guessed name+set ----
-async function searchTCGForCard(name, set){
+// ---- single-card Claude vision call ----
+// Reads the card name, set, AND card number (bottom-right corner e.g. "61/132").
+// The number is critical for pinpointing the exact printing in the TCG API.
+async function identifySingleCard(imageDataUrl, apiKey){
+  const base64 = imageDataUrl.split(',')[1];
+  const mediaType = imageDataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-5',
+      max_tokens: 256,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: `This is a photo of a Pokémon TCG card. Read these four things carefully:
+
+1. FULL CARD NAME — include any trainer prefix (e.g. "Blaine's Charmander", NOT just "Charmander")
+2. CARD NUMBER — printed bottom-right corner (e.g. "61/132", "4/102", "SWSH001")
+3. SET NAME — the set name printed on the card or identifiable from the set symbol (e.g. "Gym Challenge", "Base Set", "Scarlet & Violet")
+4. RARITY — the symbol at the bottom (circle=Common, diamond=Uncommon, star=Rare, star-H=Holo Rare)
+
+Respond ONLY with valid JSON — no other text:
+{"name":"Blaine's Charmander","set":"Gym Challenge","number":"61/132","rarity":"Common","confidence":"high"}
+
+If unreadable: {"name":"unknown","set":"","number":"","rarity":"","confidence":"low"}` }
+        ]
+      }]
+    })
+  });
+  if (!res.ok){
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Claude API error ${res.status}`);
+  }
+  const data = await res.json();
+  const text = data.content?.[0]?.text || '';
+  const match = text.match(/\{[\s\S]*?\}/);
+  if (!match) return { name: 'unknown', set: '', number: '', confidence: 'low' };
+  try { return JSON.parse(match[0]); } catch { return { name: 'unknown', set: '', number: '', confidence: 'low' }; }
+}
+
+// ---- single-card scan processor ----
+// Identifies one card photo then opens the slot picker so the user chooses where to place it.
+async function processSingleCardFile(file, pageIndex, slotIndex){
+  showLoading('Reading image…');
+  try{
+    const dataUrl = await fileToDataUrl(file);
+    const resized  = await resizeImage(dataUrl, 800);
+
+    showLoading('Identifying card…');
+    const guess = await identifySingleCard(resized, binderState.anthropicKey);
+
+    if (!guess || guess.name === 'unknown'){
+      hideLoading();
+      toast('Could not identify — try searching manually.');
+      openSearchPanel(pageIndex, slotIndex);
+      return;
+    }
+
+    showLoading('Matching card data…');
+    const card = await searchTCGForCard(guess.name, guess.set, guess.number);
+    hideLoading();
+
+    if (!card){
+      toast(`Saw "${guess.name}" but no API match — search manually.`);
+      openSearchPanel(pageIndex, slotIndex);
+      return;
+    }
+
+    // If a specific slot was pre-selected (tapped directly), place the card there immediately.
+    // If slotIndex is -1 (triggered from page-level button), show the slot picker instead.
+    if (slotIndex >= 0){
+      binderState.pages[pageIndex][slotIndex] = {
+        cardId: card.id,
+        name: card.name,
+        image: card.images.large || card.images.small,
+        set: card.set?.name || '',
+        owned: true,
+        quantity: 1,
+        condition: 'Near Mint',
+        notes: ''
+      };
+      persist();
+      renderPage(currentSpread, null);
+      updateSummary();
+      hideOverlay();
+      toast(`${card.name} added to slot ${slotIndex + 1}.`);
+    } else {
+      openSlotPicker(pageIndex, card);
+    }
+
+  }catch(err){
+    hideLoading();
+    console.error(err);
+    toast('Scan failed: ' + (err.message || 'unknown error'));
+  }
+}
+
+// ---- slot picker ----
+// Shows the current page as a visual 3×3 grid. User taps an empty slot to place the card.
+// Slots are numbered 1–9, left-to-right, top-to-bottom (matching binder sleeve layout).
+function openSlotPicker(pageIndex, card){
+  const page = binderState.pages[pageIndex];
+  const cardImg = card.images?.large || card.images?.small || '';
+  const cardName = card.name || '';
+  const cardSet  = card.set?.name || '';
+
+  let cellsHtml = '';
+  for (let i = 0; i < 9; i++){
+    const existing = page[i];
+    const label = i + 1;
+    if (existing){
+      cellsHtml += `
+        <div class="slotPickerCell filled" title="Slot ${label}: ${escapeHtml(existing.name)} (filled)">
+          <span class="slotPickerNum">${label}</span>
+          ${existing.image ? `<img src="${existing.image}" alt="${escapeHtml(existing.name)}">` : '<span style="font-size:10px;color:#aaa">filled</span>'}
+        </div>`;
+    } else {
+      cellsHtml += `
+        <div class="slotPickerCell empty" data-slot="${i}" title="Place in slot ${label}">
+          <span class="slotPickerNum">${label}</span>
+          <span style="font-size:20px;margin-top:4px;">+</span>
+          <span style="font-size:10px;margin-top:2px;">slot ${label}</span>
+        </div>`;
+    }
+  }
+
+  showOverlay(`
+    <h2 style="margin-bottom:8px;">Choose a slot — Page ${pageIndex + 1}</h2>
+    <div class="slotPickerCard">
+      ${cardImg ? `<img src="${cardImg}" alt="${escapeHtml(cardName)}">` : ''}
+      <div>
+        <strong>${escapeHtml(cardName)}</strong>
+        <div style="font-size:12px;color:#888;margin-top:2px;">${escapeHtml(cardSet)}</div>
+        <div style="font-size:11px;color:#4a8;margin-top:5px;font-weight:600;">✓ Official card art</div>
+        <div style="font-size:11px;color:#aaa;margin-top:2px;">Tap an empty slot to place this card</div>
+      </div>
+    </div>
+    <div class="slotPickerGrid">${cellsHtml}</div>
+    <div class="closeRow" style="margin-top:12px;">
+      <button class="secondary" id="slotPickerCancelBtn">Cancel</button>
+    </div>
+  `);
+
+  document.getElementById('slotPickerCancelBtn').addEventListener('click', hideOverlay);
+
+  document.querySelectorAll('.slotPickerCell.empty').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const slotIndex = parseInt(cell.dataset.slot);
+      binderState.pages[pageIndex][slotIndex] = {
+        cardId: card.id,
+        name: card.name,
+        image: card.images.large || card.images.small,
+        set: card.set?.name || '',
+        owned: true,
+        quantity: 1,
+        condition: 'Near Mint',
+        notes: ''
+      };
+      persist();
+      renderPage(currentSpread, null);
+      updateSummary();
+      hideOverlay();
+      toast(`${card.name} → slot ${slotIndex + 1}.`);
+    });
+  });
+}
+
+// ---- TCG API lookup for a guessed name + number ----
+// Strategy: try exact name + card number first (most precise), then fall back to name + set.
+async function searchTCGForCard(name, set, number){
   try{
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-    const url = `https://api.pokemontcg.io/v2/cards?q=name:${encodeURIComponent(name)}*&pageSize=6`;
-    const res = await fetch(url, { headers });
-    const data = await res.json();
-    const cards = data.data || [];
-    if (!cards.length) return null;
+
+    const numOnly = number ? number.toString().split('/')[0].trim() : '';
+    const setShort = set ? set.toLowerCase().split(' ').slice(0, 3).join(' ') : '';
+
+    // Pass 1: exact name + number + set (most precise)
+    if (numOnly && set){
+      const q1 = `name:"${name}" number:${numOnly} set.name:"${set}"`;
+      const r1 = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q1)}&pageSize=4`, { headers });
+      const d1 = await r1.json();
+      if (d1.data?.length) return d1.data[0];
+    }
+
+    // Pass 2: exact name + number
+    if (numOnly){
+      const q2 = `name:"${name}" number:${numOnly}`;
+      const r2 = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q2)}&pageSize=4`, { headers });
+      const d2 = await r2.json();
+      if (d2.data?.length) return d2.data[0];
+    }
+
+    // Pass 3: last word of name + number (handles apostrophes in names like "Blaine's")
+    if (numOnly){
+      const lastName = name.split(' ').pop();
+      const q3 = `name:${encodeURIComponent(lastName)}* number:${numOnly}`;
+      const r3 = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q3)}&pageSize=8`, { headers });
+      const d3 = await r3.json();
+      if (d3.data?.length){
+        const exact = d3.data.find(c => c.name.toLowerCase() === name.toLowerCase());
+        return exact || d3.data[0];
+      }
+    }
+
+    // Pass 4: name + set name (fallback when number not readable)
     if (set){
-      const hit = cards.find(c => c.set?.name?.toLowerCase().includes(set.toLowerCase().slice(0, 6)));
+      const q4 = `name:${encodeURIComponent(name)}* set.name:"${set}"`;
+      const r4 = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q4)}&pageSize=6`, { headers });
+      const d4 = await r4.json();
+      if (d4.data?.length) return d4.data[0];
+    }
+
+    // Pass 5: name only, pick best set match from results
+    const q5 = `name:${encodeURIComponent(name)}*`;
+    const r5 = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q5)}&pageSize=16`, { headers });
+    const d5 = await r5.json();
+    const cards = d5.data || [];
+    if (!cards.length) return null;
+    if (setShort){
+      const hit = cards.find(c => c.set?.name?.toLowerCase().includes(setShort));
       if (hit) return hit;
     }
     return cards[0];
@@ -2148,7 +2751,7 @@ async function processScanFile(file, pageIndex){
         return { ...base, name: null, image: null, set: '', confidence: 'unknown' };
       }
 
-      const card = await searchTCGForCard(guess.name, guess.set);
+      const card = await searchTCGForCard(guess.name, guess.set, guess.number);
       return {
         ...base,
         cardId: card?.id || null,
@@ -2391,10 +2994,14 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
       Get a free key at <span style="color:#555">pokemontcg.io</span>. Works without one, just rate-limited.
     </p>
     <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
-    <label style="font-size:12px;color:#555;">Claude (Anthropic) API key — <strong>required for 📷 Scan Page</strong></label>
-    <input type="text" id="anthropicKeyInput" placeholder="sk-ant-..." value="${escapeHtml(binderState.anthropicKey || '')}">
+    <label style="font-size:12px;color:#555;">Claude (Anthropic) API key — <strong>required for 📷 Scan Card</strong></label>
+    <input type="text" id="anthropicKeyInput" placeholder="sk-ant-..."
+      value="${escapeHtml(binderState.anthropicKey || '')}"
+      autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <button class="secondary" id="testKeyBtn" style="margin-top:6px;width:100%;">Test Key</button>
+    <div id="keyTestResult" style="font-size:12px;margin-top:4px;"></div>
     <p style="font-size:12px;color:#888;margin-top:4px;">
-      Get a key at <span style="color:#555">console.anthropic.com</span>. Used to identify cards from your photos (~$0.01–0.05 per page scan). Stored only in your binder data.
+      Get a key at <span style="color:#555">console.anthropic.com</span>. Requires a billing balance — used to identify cards from your photos. Stored only on this device.
     </p>
     <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
     <p style="font-size:12px;color:#888;">
@@ -2412,6 +3019,41 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
     toast('Settings saved.');
   });
   document.getElementById('closeSettingsBtn').addEventListener('click', hideOverlay);
+
+  document.getElementById('testKeyBtn').addEventListener('click', async () => {
+    const key = document.getElementById('anthropicKeyInput').value.trim();
+    const result = document.getElementById('keyTestResult');
+    if (!key){ result.innerHTML = '<span style="color:#c55;">⚠ Paste your key first.</span>'; return; }
+    result.innerHTML = '<span style="color:#888;">Testing…</span>';
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 5,
+          messages: [{ role: 'user', content: 'hi' }]
+        })
+      });
+      if (res.ok){
+        result.innerHTML = '<span style="color:#4a8;font-weight:600;">✓ Key works! Ready to scan.</span>';
+      } else {
+        const err = await res.json().catch(() => ({}));
+        const msg = err.error?.message || `Error ${res.status}`;
+        if (res.status === 401) result.innerHTML = `<span style="color:#c55;">✗ Invalid key — check you copied the full key.</span>`;
+        else if (res.status === 403) result.innerHTML = `<span style="color:#c55;">✗ Key not authorized — check billing at console.anthropic.com.</span>`;
+        else if (res.status === 429) result.innerHTML = `<span style="color:#c55;">✗ Rate limited — wait a moment and try again.</span>`;
+        else result.innerHTML = `<span style="color:#c55;">✗ ${msg}</span>`;
+      }
+    } catch(e) {
+      result.innerHTML = `<span style="color:#c55;">✗ Network error — check your internet connection.</span>`;
+    }
+  });
 });
 
 </script>
