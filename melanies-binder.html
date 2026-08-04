@@ -1651,6 +1651,9 @@ function openSlotOptions(pageIndex, slotIndex){
     <button class="secondary" id="searchSlotBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
       🔍 Search by card name
     </button>
+    <button class="secondary" id="promoSlotBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
+      ⭐ Browse Promo &amp; McDonald's Sets
+    </button>
     <button class="secondary" id="customSlotBtn" style="width:100%;padding:11px;font-size:14px;">
       ✏️ Add Custom Card (no API needed)
     </button>
@@ -1660,6 +1663,7 @@ function openSlotOptions(pageIndex, slotIndex){
   `);
   document.getElementById('slotOptsCancelBtn').addEventListener('click', hideOverlay);
   document.getElementById('searchSlotBtn').addEventListener('click', () => openSearchPanel(pageIndex, slotIndex));
+  document.getElementById('promoSlotBtn').addEventListener('click', () => openPromoSearch(pageIndex, slotIndex));
   document.getElementById('customSlotBtn').addEventListener('click', () => openCustomCardPanel(pageIndex, slotIndex));
   if (hasScanKey){
     document.getElementById('scanSlotBtn').addEventListener('click', () => {
@@ -2027,12 +2031,13 @@ function openNotFoundPanel(pageIndex, slotIndex, guess){
       🔄 Retry Search with All Details
     </button>
     <div style="font-size:11px;color:#aaa;text-align:center;margin-bottom:8px;">— or try a different method —</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
       <button class="secondary" id="nfNameBtn">🔍 Search by Name</button>
       <button class="secondary" id="nfSetNumBtn">🔢 Exact Set + #</button>
       <button class="secondary" id="nfBrowseBtn">📦 Browse a Set</button>
-      <button class="secondary" id="nfCustomBtn">✏️ Add as Custom</button>
+      <button class="secondary" id="nfPromoBtn">⭐ Promo Sets</button>
     </div>
+    <button class="secondary" id="nfCustomBtn" style="width:100%;margin-bottom:10px;">✏️ Add as Custom Card</button>
     <div class="closeRow">
       <button class="secondary" id="nfBackBtn">← Back to Options</button>
     </div>
@@ -2086,6 +2091,9 @@ function openNotFoundPanel(pageIndex, slotIndex, guess){
   });
   document.getElementById('nfBrowseBtn').addEventListener('click', () => {
     openBrowseSetPanel(pageIndex, slotIndex, document.getElementById('nfSet').value.trim());
+  });
+  document.getElementById('nfPromoBtn').addEventListener('click', () => {
+    openPromoSearch(pageIndex, slotIndex, () => openNotFoundPanel(pageIndex, slotIndex, guess));
   });
   document.getElementById('nfCustomBtn').addEventListener('click', () => {
     openCustomCardPanel(pageIndex, slotIndex, {
@@ -2265,8 +2273,125 @@ function openBrowseSetPanel(pageIndex, slotIndex, prefillSetName = ''){
   if (prefillSetName) doSetSearch();
 }
 
+function openPromoSearch(pageIndex, slotIndex, backFn = null){
+  pendingPickSlotRef = { pageIndex, slotIndex };
+  const goBack = backFn || (() => openSlotOptions(pageIndex, slotIndex));
+
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">⭐ Promo Sets</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 10px 0;">
+      Black Star Promos, McDonald's collections, and other promotional sets.
+    </p>
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input type="text" id="promoNameInput" placeholder="Card name in all promos…"
+             autocorrect="off" style="flex:1;font-size:13px;">
+      <button class="primary" id="promoNameBtn" style="white-space:nowrap;">Search</button>
+    </div>
+    <input type="text" id="promoSetFilter" placeholder="Filter set list…"
+           autocorrect="off" style="margin-bottom:8px;font-size:13px;color:#555;">
+    <button class="secondary" id="promoCancelBtn" style="width:100%;margin-bottom:8px;">← Back</button>
+    <div id="promoSetList"><div class="loadingMsg">Loading promo sets…</div></div>
+  `);
+
+  document.getElementById('promoCancelBtn').addEventListener('click', goBack);
+
+  // ---- card-name search across all promo sets ----
+  const doPromoNameSearch = async () => {
+    const q = document.getElementById('promoNameInput').value.trim();
+    if (!q){ return; }
+    const el = document.getElementById('promoSetList');
+    el.innerHTML = '<div class="loadingMsg">Searching promos…</div>';
+    try{
+      const headers = {};
+      if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+      const nameQ = q.includes(' ') ? `name:"${q}"` : `name:${q}*`;
+      const res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(nameQ)}&pageSize=100`, { headers });
+      const data = await res.json();
+      const cards = (data.data || []).filter(c =>
+        /promo|black.star|mcdonald/i.test(c.set?.name || '') ||
+        /promo|mcdonald/i.test(c.set?.series || '') ||
+        (c.set?.id || '').match(/p$|^mcd/)
+      );
+      if (!cards.length){
+        el.innerHTML = `<div class="emptyMsg">No promo cards found for "<em>${escapeHtml(q)}</em>". Try browsing a set below.</div>`;
+        return;
+      }
+      el.innerHTML = `<div style="font-size:12px;color:#888;margin-bottom:6px;">${cards.length} promo result${cards.length!==1?'s':''} for "<strong>${escapeHtml(q)}</strong>"</div>`;
+      cards.forEach(card => {
+        const div = document.createElement('div');
+        div.className = 'resultCard';
+        div.innerHTML = `<img src="${card.images?.small||''}" alt="${escapeHtml(card.name)}">
+          <div>${escapeHtml(card.name)}</div>
+          <div style="color:#999;font-size:10px;">${escapeHtml(card.set?.name||'')} #${escapeHtml(card.number||'')}</div>`;
+        div.addEventListener('click', () => {
+          openCardConfirmPanel(card, pageIndex, slotIndex,
+            () => openPromoSearch(pageIndex, slotIndex, backFn));
+        });
+        el.appendChild(div);
+      });
+    }catch(e){
+      document.getElementById('promoSetList').innerHTML = '<div class="emptyMsg">Search failed. Check your connection.</div>';
+    }
+  };
+
+  document.getElementById('promoNameBtn').addEventListener('click', doPromoNameSearch);
+  document.getElementById('promoNameInput').addEventListener('keydown', e => { if(e.key==='Enter') doPromoNameSearch(); });
+
+  // ---- promo set list ----
+  (async () => {
+    const el = document.getElementById('promoSetList');
+    try{
+      const headers = {};
+      if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+      const res = await fetch(`https://api.pokemontcg.io/v2/sets?pageSize=250`, { headers });
+      const data = await res.json();
+      const all = data.data || [];
+      const promoSets = all.filter(s =>
+        /promo/i.test(s.name) ||
+        /black.star/i.test(s.name) ||
+        /mcdonald/i.test(s.name)
+      ).sort((a, b) => (b.releaseDate || '').localeCompare(a.releaseDate || ''));
+
+      if (!promoSets.length){
+        el.innerHTML = '<div class="emptyMsg">No promo sets found.</div>';
+        return;
+      }
+
+      const renderList = (sets) => {
+        el.innerHTML = '';
+        if (!sets.length){ el.innerHTML = '<div class="emptyMsg">No matching sets.</div>'; return; }
+        sets.forEach(set => {
+          const div = document.createElement('div');
+          div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;border:1px solid #eee;border-radius:8px;margin-bottom:6px;cursor:pointer;';
+          div.innerHTML = `
+            ${set.images?.symbol ? `<img src="${set.images.symbol}" alt="" style="width:28px;height:28px;object-fit:contain;flex-shrink:0;">` : '<div style="width:28px;flex-shrink:0;"></div>'}
+            <div style="overflow:hidden;">
+              <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(set.name)}</div>
+              <div style="font-size:11px;color:#888;">${escapeHtml(set.series||'')} · ${set.total||'?'} cards${set.releaseDate ? ' · ' + escapeHtml(set.releaseDate) : ''}</div>
+            </div>`;
+          div.addEventListener('click', () =>
+            browseSetCards(set, pageIndex, slotIndex,
+              () => openPromoSearch(pageIndex, slotIndex, backFn)));
+          el.appendChild(div);
+        });
+      };
+
+      renderList(promoSets);
+
+      document.getElementById('promoSetFilter').addEventListener('input', e => {
+        const q = e.target.value.toLowerCase();
+        renderList(q ? promoSets.filter(s =>
+          s.name.toLowerCase().includes(q) || (s.series || '').toLowerCase().includes(q)
+        ) : promoSets);
+      });
+    }catch(e){
+      el.innerHTML = '<div class="emptyMsg">Failed to load sets. Check your connection.</div>';
+    }
+  })();
+}
+
 /* browseSetCards — loads and displays all cards in a set as a tappable image grid. */
-async function browseSetCards(set, pageIndex, slotIndex){
+async function browseSetCards(set, pageIndex, slotIndex, backFn = null){
   pendingPickSlotRef = { pageIndex, slotIndex };
 
   showOverlay(`
@@ -2279,7 +2404,8 @@ async function browseSetCards(set, pageIndex, slotIndex){
     <div id="browseGrid" class="resultsGrid" style="margin-top:0;"></div>
   `);
 
-  document.getElementById('browseBackBtn').addEventListener('click', () => openBrowseSetPanel(pageIndex, slotIndex, set.name));
+  document.getElementById('browseBackBtn').addEventListener('click',
+    backFn || (() => openBrowseSetPanel(pageIndex, slotIndex, set.name)));
 
   const el = document.getElementById('browseGrid');
   el.innerHTML = '<div class="loadingMsg">Loading cards…</div>';
@@ -2303,7 +2429,7 @@ async function browseSetCards(set, pageIndex, slotIndex){
         <div style="color:#999;font-size:10px;">#${escapeHtml(card.number||'')}</div>`;
       div.addEventListener('click', () => {
         openCardConfirmPanel(card, pageIndex, slotIndex,
-          () => browseSetCards(set, pageIndex, slotIndex));
+          () => browseSetCards(set, pageIndex, slotIndex, backFn));
       });
       el.appendChild(div);
     });
