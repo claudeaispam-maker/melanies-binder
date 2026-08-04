@@ -2265,15 +2265,33 @@ function openSetNumberSearch(pageIndex, slotIndex, prefillSet = '', prefillNumbe
     try{
       const headers = {};
       if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-      let q = '';
-      if (setVal && numVal)  q = `${setNameQ(setVal)} number:${numVal}`;
-      else if (numVal)       q = `number:${numVal}`;
-      else                   q = setNameQ(setVal);
-      const res  = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=30`, { headers });
-      const data = await res.json();
-      const cards = data.data || [];
+      const tf = async (q) => {
+        const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=30`, { headers });
+        const d = await r.json(); return d.data || [];
+      };
+      let cards = []; const seen = new Set();
+      const merge = arr => arr.forEach(c => { if(!seen.has(c.id)){ seen.add(c.id); cards.push(c); } });
+
+      if (!setVal){
+        merge(await tf(`number:${numVal}`));
+      } else if (!numVal){
+        merge(await tf(setNameQ(setVal)));
+      } else {
+        // Short code (e.g. "svp", "swshp", "smp") → try set.id and ptcgoCode first
+        if (setVal.length <= 7 && /^[A-Za-z0-9-]+$/.test(setVal)){
+          merge(await tf(`set.id:${setVal.toLowerCase()} number:${numVal}`));
+          if (!cards.length) merge(await tf(`ptcgoCode:${setVal.toUpperCase()} number:${numVal}`));
+        }
+        if (!cards.length) merge(await tf(`${setNameQ(setVal)} number:${numVal}`));
+        // Fuzzy: first word of set name wildcard
+        if (!cards.length && setVal.includes(' '))
+          merge(await tf(`set.name:${setVal.split(' ')[0]}* number:${numVal}`));
+        // Last resort: number only so user can pick from the list
+        if (!cards.length) merge(await tf(`number:${numVal}`));
+      }
+
       if (!cards.length){
-        el.innerHTML = '<div class="emptyMsg">No match. Try checking the set name spelling.</div>';
+        el.innerHTML = '<div class="emptyMsg">No match. Try the set code (e.g. "svp"), the full set name, or just the card number.</div>';
         return;
       }
       el.innerHTML = '';
@@ -2411,14 +2429,29 @@ function openPromoSearch(pageIndex, slotIndex, backFn = null){
     try{
       const headers = {};
       if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
+      const isPromo = c =>
+        /promo|black.star|mcdonald/i.test(c.set?.name || '') ||
+        /promo|mcdonald/i.test(c.set?.series || '') ||
+        (c.set?.id || '').match(/p$|^mcd|^svp|^pgo/);
+
+      // Exact/phrase search first
       const nameQ = q.includes(' ') ? `name:"${q}"` : `name:${q}*`;
       const res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(nameQ)}&pageSize=100`, { headers });
       const data = await res.json();
-      const cards = (data.data || []).filter(c =>
-        /promo|black.star|mcdonald/i.test(c.set?.name || '') ||
-        /promo|mcdonald/i.test(c.set?.series || '') ||
-        (c.set?.id || '').match(/p$|^mcd/)
-      );
+      let cards = (data.data || []).filter(isPromo);
+
+      // Wildcard fallback: if exact search found nothing, try first word wildcard
+      if (!cards.length && q.includes(' ')){
+        const r2 = await fetch(
+          `https://api.pokemontcg.io/v2/cards?q=name:${encodeURIComponent(q.split(' ')[0])}*&pageSize=100`,
+          { headers }
+        );
+        const d2 = await r2.json();
+        cards = (d2.data || []).filter(c =>
+          c.name.toLowerCase().includes(q.toLowerCase()) && isPromo(c)
+        );
+      }
+
       if (!cards.length){
         el.innerHTML = `<div class="emptyMsg">No promo cards found for "<em>${escapeHtml(q)}</em>". Try browsing a set below.</div>`;
         return;
