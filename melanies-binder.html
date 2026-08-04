@@ -2940,43 +2940,69 @@ async function processSingleCardFile(file, pageIndex, slotIndex){
     }
 
     showLoading('Matching card data…');
-    const card = await searchTCGForCard(guess.name, guess.set, guess.number, {
-      artist: guess.artist, hp: guess.hp
-    });
+    const candidates = await searchTCGForCard(
+      guess.name, guess.set, guess.number,
+      { artist: guess.artist, hp: guess.hp },
+      { returnAll: true, limit: 6 }
+    );
     hideLoading();
-
-    if (!card){
-      openNotFoundPanel(pageIndex, slotIndex, guess);
-      return;
-    }
-
-    // If a specific slot was pre-selected (tapped directly), place the card there immediately.
-    // If slotIndex is -1 (triggered from page-level button), show the slot picker instead.
-    if (slotIndex >= 0){
-      binderState.pages[pageIndex][slotIndex] = {
-        cardId: card.id,
-        name: card.name,
-        image: card.images.large || card.images.small,
-        set: card.set?.name || '',
-        owned: true,
-        quantity: 1,
-        condition: 'Near Mint',
-        notes: ''
-      };
-      persist();
-      renderPage(currentSpread, null);
-      updateSummary();
-      hideOverlay();
-      toast(`${card.name} added to slot ${slotIndex + 1}.`);
-    } else {
-      openSlotPicker(pageIndex, card);
-    }
+    openCandidatePicker(candidates, pageIndex, slotIndex, guess);
 
   }catch(err){
     hideLoading();
     console.error(err);
     toast('Scan failed: ' + (err.message || 'unknown error'));
   }
+}
+
+// ---- candidate picker ----
+// Shows up to 6 possible matching cards so the user can confirm the right one.
+function openCandidatePicker(candidates, pageIndex, slotIndex, guess){
+  if (!candidates || candidates.length === 0){
+    openNotFoundPanel(pageIndex, slotIndex, guess);
+    return;
+  }
+
+  const readAs = guess?.name && guess.name !== 'unknown'
+    ? `Claude read: <strong>${escapeHtml(guess.name)}</strong>${guess.set ? ' · ' + escapeHtml(guess.set) : ''}`
+    : 'Claude couldn\'t read the card name clearly.';
+
+  const listHtml = candidates.map((c, i) => `
+    <div class="cpCard" data-cpidx="${i}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid #ddd;border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background .15s;">
+      <img src="${c.images?.small || ''}" alt="${escapeHtml(c.name)}"
+           style="width:48px;height:67px;object-fit:contain;border-radius:4px;flex-shrink:0;background:#f5f5f5;">
+      <div style="overflow:hidden;">
+        <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)}</div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">${escapeHtml(c.set?.name || '')} &nbsp;#${escapeHtml(c.number || '')}</div>
+        ${c.rarity ? `<div style="font-size:10px;color:#aaa;margin-top:1px;">${escapeHtml(c.rarity)}</div>` : ''}
+      </div>
+    </div>`).join('');
+
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">Which card is this?</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 10px 0;">${readAs} · Tap the correct card below.</p>
+    <div style="max-height:400px;overflow-y:auto;padding-right:2px;">${listHtml}</div>
+    <button class="secondary" id="cpNoneBtn" style="width:100%;margin-top:10px;">None of these — search manually</button>
+  `);
+
+  candidates.forEach((card, i) => {
+    document.querySelector(`[data-cpidx="${i}"]`).addEventListener('click', () => {
+      if (slotIndex >= 0){
+        binderState.pages[pageIndex][slotIndex] = {
+          cardId: card.id, name: card.name,
+          image: card.images?.large || card.images?.small || '',
+          set: card.set?.name || '', owned: true, quantity: 1, condition: 'Near Mint', notes: ''
+        };
+        persist(); renderPage(currentSpread, null); updateSummary();
+        hideOverlay();
+        toast(`${card.name} added to slot ${slotIndex + 1}.`);
+      } else {
+        openSlotPicker(pageIndex, card);
+      }
+    });
+  });
+
+  document.getElementById('cpNoneBtn').addEventListener('click', () => openNotFoundPanel(pageIndex, slotIndex, guess));
 }
 
 // ---- slot picker ----
@@ -3049,9 +3075,9 @@ function openSlotPicker(pageIndex, card){
   });
 }
 
-// 7-pass search: starts with the most precise identifiers and broadens if nothing is found.
-// meta = { artist, hp } from Claude's reading — used in passes 6 & 7.
-async function searchTCGForCard(name, set, number, meta = {}){
+// returnAll:true collects up to `limit` unique candidates across all passes (for the picker panel).
+// Default mode (returnAll:false) returns the first match and exits early, as before.
+async function searchTCGForCard(name, set, number, meta = {}, { returnAll = false, limit = 6 } = {}){
   try{
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
@@ -3063,67 +3089,86 @@ async function searchTCGForCard(name, set, number, meta = {}){
       const d = await r.json(); return d.data || [];
     };
 
-    // --- McDonald's early pass — apostrophes break quoted set.name queries ---
-    // set.name:McDonald* matches all years (2011 / 2012 / 2019 / 2021 / 2022 / 2023 …)
+    const candidates = []; const seenIds = new Set();
+    const add = (arr) => arr.forEach(c => {
+      if (!seenIds.has(c.id) && candidates.length < limit){ seenIds.add(c.id); candidates.push(c); }
+    });
+    const done = () => returnAll ? candidates.length >= limit : false;
+
+    // --- McDonald's early pass ---
     if (set && /mcdonald/i.test(set)){
       if (numOnly){
         const d = await tf(`name:"${name}" number:${numOnly} set.name:McDonald*`, 6);
-        if (d.length) return d[0];
+        if (!returnAll && d.length) return d[0];
+        add(d);
       }
-      const d2 = await tf(`name:${encodeURIComponent(name)}* set.name:McDonald*`, 10);
-      if (d2.length) return d2[0];
+      if (!done()){
+        const d2 = await tf(`name:${encodeURIComponent(name)}* set.name:McDonald*`, 10);
+        if (!returnAll && d2.length) return d2[0];
+        add(d2);
+      }
+      if (returnAll) return candidates;
     }
 
-    // --- Pass 1: name + number + set (all three — most precise) ---
-    if (numOnly && set){
+    // --- Pass 1: name + number + set ---
+    if (!done() && numOnly && set){
       const d = await tf(`name:"${name}" number:${numOnly} ${setNameQ(set)}`, 4);
-      if (d.length) return d[0];
+      if (!returnAll && d.length) return d[0];
+      add(d);
     }
 
     // --- Pass 2: name + number ---
-    if (numOnly){
+    if (!done() && numOnly){
       const d = await tf(`name:"${name}" number:${numOnly}`, 4);
-      if (d.length) return d[0];
+      if (!returnAll && d.length) return d[0];
+      add(d);
     }
 
-    // --- Pass 3: last word of name + number (handles apostrophes like "Blaine's") ---
-    if (numOnly){
+    // --- Pass 3: last word of name + number ---
+    if (!done() && numOnly){
       const last = name.split(' ').pop();
       const d = await tf(`name:${encodeURIComponent(last)}* number:${numOnly}`, 8);
-      if (d.length){
+      if (!returnAll && d.length){
         return d.find(c => c.name.toLowerCase() === name.toLowerCase()) || d[0];
       }
+      add(d);
     }
 
     // --- Pass 4: name + set ---
-    if (set){
+    if (!done() && set){
       const d = await tf(`name:${encodeURIComponent(name)}* ${setNameQ(set)}`, 6);
-      if (d.length) return d[0];
+      if (!returnAll && d.length) return d[0];
+      add(d);
     }
 
-    // --- Pass 5: name only, fuzzy-match set from results ---
-    {
+    // --- Pass 5: name only ---
+    if (!done()){
       const d = await tf(`name:${encodeURIComponent(name)}*`, 16);
-      if (d.length){
+      if (!returnAll && d.length){
         if (setShort){
           const hit = d.find(c => c.set?.name?.toLowerCase().includes(setShort));
           if (hit) return hit;
         }
         if (!meta.artist && !meta.hp) return d[0];
       }
+      add(d);
     }
 
-    // --- Pass 6: artist + number (bypasses name — works even when name is misread) ---
-    if (numOnly && meta.artist){
+    // --- Pass 6: artist + number ---
+    if (!done() && numOnly && meta.artist){
       const d = await tf(`artist:"${meta.artist}" number:${numOnly}`, 4);
-      if (d.length) return d[0];
+      if (!returnAll && d.length) return d[0];
+      add(d);
     }
 
-    // --- Pass 7: name + HP + set (alternative when number is unreadable) ---
-    if (set && meta.hp){
+    // --- Pass 7: name + HP + set ---
+    if (!done() && set && meta.hp){
       const d = await tf(`name:${encodeURIComponent(name)}* hp:${meta.hp} ${setNameQ(set)}`, 6);
-      if (d.length) return d[0];
+      if (!returnAll && d.length) return d[0];
+      add(d);
     }
+
+    if (returnAll) return candidates;
 
     // Fall through from pass 5 if it had results but no set match
     {
@@ -3132,7 +3177,7 @@ async function searchTCGForCard(name, set, number, meta = {}){
     }
 
     return null;
-  }catch(e){ return null; }
+  }catch(e){ return returnAll ? [] : null; }
 }
 
 // ---- main scan processor ----
