@@ -1940,7 +1940,12 @@ async function doSearch(){
       el.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
         <div>${escapeHtml(card.name)}</div>
         <div style="color:#999;font-size:10px;">${escapeHtml(card.set ? card.set.name : '')} #${escapeHtml(card.number||'')}</div>`;
-      el.addEventListener('click', () => placeCard(card));
+      el.addEventListener('click', () => {
+        const ref = pendingPickSlotRef;
+        if (!ref) return;
+        openCardConfirmPanel(card, ref.pageIndex, ref.slotIndex,
+          () => openSearchPanel(ref.pageIndex, ref.slotIndex, q));
+      });
       resultsGrid.appendChild(el);
     });
   }catch(e){
@@ -2163,7 +2168,10 @@ function openSetNumberSearch(pageIndex, slotIndex, prefillSet = '', prefillNumbe
         div.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
           <div>${escapeHtml(card.name)}</div>
           <div style="color:#999;font-size:10px;">${escapeHtml(card.set?.name||'')} #${escapeHtml(card.number||'')}</div>`;
-        div.addEventListener('click', () => placeCard(card));
+        div.addEventListener('click', () => {
+          openCardConfirmPanel(card, pageIndex, slotIndex,
+            () => openSetNumberSearch(pageIndex, slotIndex, setVal, numVal));
+        });
         el.appendChild(div);
       });
     }catch(e){
@@ -2293,7 +2301,10 @@ async function browseSetCards(set, pageIndex, slotIndex){
       div.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
         <div>${escapeHtml(card.name)}</div>
         <div style="color:#999;font-size:10px;">#${escapeHtml(card.number||'')}</div>`;
-      div.addEventListener('click', () => placeCard(card));
+      div.addEventListener('click', () => {
+        openCardConfirmPanel(card, pageIndex, slotIndex,
+          () => browseSetCards(set, pageIndex, slotIndex));
+      });
       el.appendChild(div);
     });
   }catch(e){
@@ -2958,6 +2969,52 @@ async function processSingleCardFile(file, pageIndex, slotIndex){
   }
 }
 
+// ---- card confirm panel ----
+// Shown after any search result is tapped. Displays full card details before committing.
+// backFn() re-opens whatever panel the user came from so they can pick a different card.
+function openCardConfirmPanel(card, pageIndex, slotIndex, backFn){
+  const img = card.images?.large || card.images?.small || '';
+  const subtypesStr = Array.isArray(card.subtypes) ? card.subtypes.join(', ') : (card.subtypes || '');
+
+  showOverlay(`
+    <h2 style="margin-bottom:10px;">Is this the right card?</h2>
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px;">
+      <img src="${img}" alt="${escapeHtml(card.name)}"
+           style="width:110px;border-radius:6px;flex-shrink:0;background:#f0f0f0;box-shadow:0 2px 6px rgba(0,0,0,.15);">
+      <div style="flex:1;overflow:hidden;padding-top:2px;">
+        <div style="font-weight:700;font-size:16px;line-height:1.25;margin-bottom:5px;">${escapeHtml(card.name)}</div>
+        <div style="font-size:12px;color:#666;margin-bottom:3px;">${escapeHtml(card.set?.name || '')} · #${escapeHtml(card.number || '')}</div>
+        ${card.rarity    ? `<div style="font-size:11px;color:#888;margin-bottom:2px;">${escapeHtml(card.rarity)}</div>` : ''}
+        ${card.supertype ? `<div style="font-size:11px;color:#888;margin-bottom:2px;">${escapeHtml(card.supertype)}${subtypesStr ? ' · ' + escapeHtml(subtypesStr) : ''}</div>` : ''}
+        ${card.hp        ? `<div style="font-size:11px;color:#888;margin-bottom:2px;">HP ${escapeHtml(String(card.hp))}</div>` : ''}
+        ${card.artist    ? `<div style="font-size:10px;color:#aaa;">Art: ${escapeHtml(card.artist)}</div>` : ''}
+      </div>
+    </div>
+    <button class="primary"   id="cfmAddBtn"    style="width:100%;margin-bottom:8px;">Add to Binder</button>
+    <button class="secondary" id="cfmBackBtn"   style="width:100%;margin-bottom:4px;">← Back to Results</button>
+    <button class="secondary" id="cfmSearchBtn" style="width:100%;">Search Again</button>
+  `);
+
+  document.getElementById('cfmAddBtn').addEventListener('click', () => {
+    pendingPickSlotRef = { pageIndex, slotIndex };
+    if (slotIndex >= 0){
+      binderState.pages[pageIndex][slotIndex] = {
+        cardId: card.id, name: card.name,
+        image: card.images?.large || card.images?.small || '',
+        set: card.set?.name || '', owned: true, quantity: 1, condition: 'Near Mint', notes: ''
+      };
+      persist(); renderPage(currentSpread, null); updateSummary();
+      hideOverlay();
+      toast(`${card.name} added to slot ${slotIndex + 1}.`);
+    } else {
+      openSlotPicker(pageIndex, card);
+    }
+  });
+
+  document.getElementById('cfmBackBtn').addEventListener('click', backFn);
+  document.getElementById('cfmSearchBtn').addEventListener('click', () => openSearchPanel(pageIndex, slotIndex));
+}
+
 // ---- candidate picker ----
 // Shows up to 6 possible matching cards so the user can confirm the right one.
 function openCandidatePicker(candidates, pageIndex, slotIndex, guess){
@@ -2990,18 +3047,8 @@ function openCandidatePicker(candidates, pageIndex, slotIndex, guess){
 
   candidates.forEach((card, i) => {
     document.querySelector(`[data-cpidx="${i}"]`).addEventListener('click', () => {
-      if (slotIndex >= 0){
-        binderState.pages[pageIndex][slotIndex] = {
-          cardId: card.id, name: card.name,
-          image: card.images?.large || card.images?.small || '',
-          set: card.set?.name || '', owned: true, quantity: 1, condition: 'Near Mint', notes: ''
-        };
-        persist(); renderPage(currentSpread, null); updateSummary();
-        hideOverlay();
-        toast(`${card.name} added to slot ${slotIndex + 1}.`);
-      } else {
-        openSlotPicker(pageIndex, card);
-      }
+      openCardConfirmPanel(card, pageIndex, slotIndex,
+        () => openCandidatePicker(candidates, pageIndex, slotIndex, guess));
     });
   });
 
