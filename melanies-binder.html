@@ -1928,17 +1928,29 @@ async function doSearch(){
     const nameQ = q.includes(' ') ? `name:"${q}"` : `name:${q}*`;
     let qStr = nameQ;
     if (setFilter) qStr += ` ${setNameQ(setFilter)}`;
-    const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(qStr)}&pageSize=30`;
+    // Fetch more results when no set filter so we can surface promo versions client-side
+    const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(qStr)}&pageSize=${setFilter ? 30 : 100}`;
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error('API error ' + res.status);
     const data = await res.json();
-    const cards = data.data || [];
-    if (cards.length === 0){
+    const allCards = data.data || [];
+    if (allCards.length === 0){
       resultsGrid.innerHTML = '<div class="emptyMsg">No cards found. Try a broader name or clear the set filter.</div>';
       return;
     }
+
+    const isPromoCard = c =>
+      /promo|black.star|mcdonald/i.test(c.set?.name || '') ||
+      /promo|mcdonald/i.test(c.set?.series || '') ||
+      (c.set?.id || '').match(/p$|^mcd|^svp/);
+
+    const mainCards   = allCards.filter(c => !isPromoCard(c)).slice(0, 30);
+    const promoCards  = allCards.filter(isPromoCard).slice(0, 20);
+    const cards       = mainCards.length ? mainCards : allCards.slice(0, 30);
+    const promoExtras = mainCards.length ? promoCards : [];
+
     resultsGrid.innerHTML = '';
-    cards.forEach(card => {
+    const renderCard = (card) => {
       const el = document.createElement('div');
       el.className = 'resultCard';
       el.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
@@ -1951,7 +1963,15 @@ async function doSearch(){
           () => openSearchPanel(ref.pageIndex, ref.slotIndex, q));
       });
       resultsGrid.appendChild(el);
-    });
+    };
+    cards.forEach(renderCard);
+    if (promoExtras.length){
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'font-size:11px;font-weight:600;color:#888;padding:8px 0 4px;grid-column:1/-1;border-top:1px solid #eee;margin-top:4px;';
+      hdr.textContent = '⭐ Promo versions:';
+      resultsGrid.appendChild(hdr);
+      promoExtras.forEach(renderCard);
+    }
   }catch(e){
     console.warn(e);
     resultsGrid.innerHTML = '<div class="emptyMsg">Search failed. Check your connection or API key.</div>';
@@ -2726,7 +2746,7 @@ function openMovePanel(fromPage, fromSlot, viewPage){
 /* ---------------------------------------------------------------------
    PAGE MANAGEMENT — add, remove, reorder
 --------------------------------------------------------------------- */
-const MAX_PAGES = 12;
+const MAX_PAGES = 24;
 
 function addPage(){
   if (binderState.pages.length >= MAX_PAGES){
@@ -3293,6 +3313,18 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
       if (returnAll) return candidates;
     }
 
+    // --- Promo number pass: SWSH001, SM01, XY01, BW01, HS01, DP01, SVP001… ---
+    if (!done() && numOnly && /^(SWSH|SM|XY|BW|HS|DP|SVP|SV|POGO|PR)/i.test(numOnly)){
+      const d = await tf(`${nameExact} number:${numOnly}`, 6);
+      if (!returnAll && d.length) return d[0];
+      add(d);
+      if (!done()){
+        const d2 = await tf(`${nameWild} number:${numOnly}`, 10);
+        if (!returnAll && d2.length) return d2[0];
+        add(d2);
+      }
+    }
+
     // --- Pass 1: name + number + set ---
     if (!done() && numOnly && set){
       const d = await tf(`${nameExact} number:${numOnly} ${setNameQ(set)}`, 4);
@@ -3323,6 +3355,24 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
       add(d);
     }
 
+    // --- Pass 4b: promo set fallback (set name has promo/black-star keyword but exact match failed) ---
+    if (!done() && set && /promo|black.star/i.test(set)){
+      const d = await tf(`${nameWild}`, 80);
+      const hits = d.filter(c =>
+        /promo|black.star|mcdonald/i.test(c.set?.name || '') ||
+        /promo|mcdonald/i.test(c.set?.series || '') ||
+        (c.set?.id || '').match(/p$|^mcd|^svp/)
+      );
+      if (!returnAll && hits.length){
+        if (numOnly){
+          const nh = hits.find(c => c.number === numOnly || c.number === numOnly.replace(/^[A-Za-z]+/, ''));
+          if (nh) return nh;
+        }
+        return hits[0];
+      }
+      add(hits);
+    }
+
     // --- Pass 5: name only ---
     if (!done()){
       const d = await tf(`${nameWild}`, 16);
@@ -3348,6 +3398,20 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
       const d = await tf(`${nameWild} hp:${meta.hp} ${setNameQ(set)}`, 6);
       if (!returnAll && d.length) return d[0];
       add(d);
+    }
+
+    // --- Promo catch-all: broad fetch filtered to all promo sets ---
+    const looksPromo = /promo|black.star|mcdonald/i.test(set || '') ||
+                       /^(SWSH|SM|XY|BW|HS|DP|SVP|SV|POGO|PR)/i.test(numOnly || '');
+    if (!done() && looksPromo){
+      const d = await tf(`${nameExact}`, 100);
+      const hits = d.filter(c =>
+        /promo|black.star|mcdonald/i.test(c.set?.name || '') ||
+        /promo|mcdonald/i.test(c.set?.series || '') ||
+        (c.set?.id || '').match(/p$|^mcd|^svp/)
+      );
+      if (!returnAll && hits.length) return hits[0];
+      add(hits);
     }
 
     if (returnAll) return candidates;
