@@ -544,6 +544,7 @@
   /* Dim the image for cards marked as missing */
   .galleryCard.missing-card img{ filter:grayscale(0.9) brightness(0.7); opacity:0.7; }
   .galleryCard img{ width:100%; aspect-ratio:2/3; object-fit:cover; display:block; }
+  .galleryImgWrap{ position:relative; overflow:hidden; }
   /* Info strip below the card image */
   .galleryCardInfo{ padding:4px 6px 5px; }
   .galleryCardName{
@@ -1231,13 +1232,17 @@ function renderGallery(){
   visible.forEach(({ slot, pageIndex, slotIndex }) => {
     const tile = document.createElement('div');
     tile.className = 'galleryCard' + (slot.owned ? '' : ' missing-card');
+    tile.dataset.pageIdx = pageIndex;
+    tile.dataset.slotIdx = slotIndex;
 
     const priceText   = slot.price != null ? `$${Number(slot.price).toFixed(2)}` : '—';
     const statusClass = slot.owned ? 'owned' : 'missing';
 
     // loading="lazy" defers off-screen images so the gallery opens fast
     tile.innerHTML = `
-      <img src="${slot.image}" alt="${escapeHtml(slot.name)}" loading="lazy">
+      <div class="galleryImgWrap">
+        <img src="${slot.image}" alt="${escapeHtml(slot.name)}" loading="lazy">
+      </div>
       <div class="galleryCardInfo">
         <div class="galleryCardName">${escapeHtml(slot.name)}</div>
         <div class="galleryCardMeta">
@@ -1251,6 +1256,9 @@ function renderGallery(){
     tile.addEventListener('click', () => openDetailPanel(pageIndex, slotIndex));
     grid.appendChild(tile);
   });
+
+  // Add fog overlays to all tiles if fog mode is active
+  if (fogMode) setTimeout(initGalleryFogCanvases, 0);
 }
 
 /* =====================================================================
@@ -1304,11 +1312,13 @@ function drawFog(canvas){
 }
 
 /* attachWipeListeners — wires mouse + touch events to a fog canvas so
-   the user can drag to erase fog (like wiping a window) or tap to open
-   the detail panel. A short tap (< 4 px movement) is treated as a click. */
-function attachWipeListeners(canvas){
+   the user can drag to erase fog or tap to trigger onTap.
+   onTap defaults to opening the detail panel; pass a custom fn to override
+   (e.g. the click-to-fully-reveal behaviour used in binder + gallery). */
+function attachWipeListeners(canvas, onTap){
   const pageIndex = parseInt(canvas.dataset.pageIdx);
   const slotIndex = parseInt(canvas.dataset.slotIdx);
+  const handleTap = onTap || (() => openDetailPanel(pageIndex, slotIndex));
 
   // Convert browser client coords → canvas pixel coords
   // (needed because CSS scales the canvas element but pixel dimensions are fixed)
@@ -1351,8 +1361,7 @@ function attachWipeListeners(canvas){
     erase(...Object.values(toCanvas(e.clientX, e.clientY)));
   });
   canvas.addEventListener('mouseup', () => {
-    // Tap (not drag) → open detail panel as if the pocket was clicked normally
-    if (!moved) openDetailPanel(pageIndex, slotIndex);
+    if (!moved) handleTap();
     moved = false;
   });
 
@@ -1370,26 +1379,57 @@ function attachWipeListeners(canvas){
     erase(...Object.values(toCanvas(t.clientX, t.clientY)));
   }, {passive: false});
   canvas.addEventListener('touchend', () => {
-    if (!moved) openDetailPanel(pageIndex, slotIndex);
+    if (!moved) handleTap();
     moved = false;
   });
 }
 
 /* initFogCanvases — called via setTimeout after a page face is inserted into
    the DOM, so CSS layout has settled and offsetWidth/Height are correct.
-   Sizes every fog canvas in pixels, draws the initial frost, then wires wipes. */
+   Sizes every fog canvas in pixels, draws the initial frost, then wires wipes.
+   Tap clears + removes the canvas so the next click reaches the pocket. */
 function initFogCanvases(face){
   face.querySelectorAll('.fogCanvas').forEach(canvas => {
     const pocket  = canvas.parentElement;
     canvas.width  = pocket.offsetWidth  || 100;
     canvas.height = pocket.offsetHeight || 140;
     drawFog(canvas);
-    attachWipeListeners(canvas);
+    const clearFog = () => {
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      canvas.remove();
+    };
+    attachWipeListeners(canvas, clearFog);
   });
 }
 
-/* toggleFogMode — flips fog on/off. Re-renders the current page so that
-   buildPocketEl knows whether to add fog canvases. */
+/* initGalleryFogCanvases — adds fog canvases to every gallery tile's image
+   wrapper that doesn't already have one. Safe to call after re-reveals since
+   it skips wraps that already have a canvas. */
+function initGalleryFogCanvases(){
+  document.querySelectorAll('.galleryImgWrap').forEach(wrap => {
+    if (wrap.querySelector('.fogCanvas')) return;
+    const tile    = wrap.closest('.galleryCard');
+    const pageIdx = parseInt(tile.dataset.pageIdx);
+    const slotIdx = parseInt(tile.dataset.slotIdx);
+    const canvas  = document.createElement('canvas');
+    canvas.className      = 'fogCanvas';
+    canvas.dataset.pageIdx = pageIdx;
+    canvas.dataset.slotIdx = slotIdx;
+    wrap.appendChild(canvas);
+    canvas.width  = wrap.offsetWidth  || 120;
+    canvas.height = wrap.offsetHeight || 160;
+    drawFog(canvas);
+    const clearFog = () => {
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      canvas.remove();
+    };
+    attachWipeListeners(canvas, clearFog);
+  });
+}
+
+/* toggleFogMode — flips fog on/off.
+   In binder mode: re-renders the current page so pockets gain/lose fog.
+   In gallery mode: adds or removes fog canvases from all tiles. */
 function toggleFogMode(){
   fogMode = !fogMode;
   const btn      = document.getElementById('fogBtn');
@@ -1397,17 +1437,23 @@ function toggleFogMode(){
   btn.classList.toggle('active', fogMode);
   btn.textContent        = fogMode ? '🌫 Fog On' : '🌫 Fog';
   resetBtn.style.display = fogMode ? ''         : 'none';
-  renderPage(currentSpread, null); // rebuild so pockets gain/lose fog overlay
+  if (galleryMode){
+    if (fogMode) setTimeout(initGalleryFogCanvases, 0);
+    else document.querySelectorAll('#galleryGrid .fogCanvas').forEach(c => c.remove());
+  } else {
+    renderPage(currentSpread, null); // rebuild so pockets gain/lose fog overlay
+  }
 }
 
-/* resetFog — redraws fresh fog on every visible canvas, re-hiding any cards
-   the user has already wiped. Does not affect fog-off mode. */
+/* resetFog — redraws fresh fog on every visible canvas, and in gallery mode
+   also re-adds fog to any tiles the user already revealed by clicking. */
 function resetFog(){
   document.querySelectorAll('.fogCanvas').forEach(canvas => {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawFog(canvas); // paint fresh frost over the cleared area
+    drawFog(canvas);
   });
+  if (galleryMode) setTimeout(initGalleryFogCanvases, 0);
 }
 
 /* initFogControls — wires the Fog and Reset buttons once on startup. */
