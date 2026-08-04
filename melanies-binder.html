@@ -173,6 +173,46 @@
     font-size:12px; cursor:pointer;
   }
   #coverBtns button:hover{ background:rgba(0,0,0,0.85); }
+  /* ---- cover search bar ---- */
+  #coverSearch{
+    position:absolute; bottom:22px; left:50%;
+    transform:translateX(-50%);
+    width:min(340px,88vw); z-index:55;
+  }
+  #coverSearchInput{
+    width:100%; box-sizing:border-box;
+    padding:10px 14px 10px 38px;
+    border-radius:22px; border:none;
+    font-size:14px;
+    background:rgba(255,255,255,0.93);
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    outline:none; color:#222;
+    box-shadow:0 4px 18px rgba(0,0,0,0.4);
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23999'%3E%3Cpath fill-rule='evenodd' d='M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:11px center; background-size:15px;
+  }
+  #coverSearchResults{
+    background:rgba(255,255,255,0.97);
+    border-radius:12px; margin-top:6px;
+    max-height:260px; overflow-y:auto;
+    box-shadow:0 8px 28px rgba(0,0,0,0.4);
+    display:none;
+  }
+  #coverSearchResults.has-results{ display:block; }
+  .csHit{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 13px; cursor:pointer;
+    border-bottom:1px solid rgba(0,0,0,0.06);
+    transition:background 0.12s;
+  }
+  .csHit:last-child{ border-bottom:none; }
+  .csHit:hover{ background:rgba(0,0,0,0.04); }
+  .csHit img{ width:34px; height:48px; object-fit:contain; border-radius:3px; flex-shrink:0; }
+  .csHit .cs-info{ flex:1; min-width:0; }
+  .csHit .cs-name{ font-size:13px; font-weight:600; color:#222; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .csHit .cs-sub{ font-size:11px; color:#888; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .csHit .cs-page{ font-size:11px; color:#aaa; flex-shrink:0; padding-left:6px; }
+  .csEmpty{ padding:14px; text-align:center; color:#888; font-size:13px; }
 
   /* ---------------- BINDER APP ---------------- */
   #app{
@@ -682,6 +722,11 @@
     <h1>Melanie's Binder</h1>
     <div class="tap-prompt">tap to open</div>
   </div>
+  <div id="coverSearch">
+    <input type="text" id="coverSearchInput" placeholder="Search your binder…"
+           autocorrect="off" autocomplete="off" autocapitalize="off">
+    <div id="coverSearchResults"></div>
+  </div>
 </div>
 
 <!-- ============== MAIN APP ============== -->
@@ -958,6 +1003,82 @@ function closeBinder(){
 }
 
 document.getElementById('backToCoverBtn').addEventListener('click', closeBinder);
+
+function openBinderToPage(pageIndex){
+  currentSpread = pageIndex;
+  const cover = document.getElementById('cover');
+  cover.classList.add('opened');
+  setTimeout(() => {
+    document.getElementById('coverStage').classList.add('hide');
+    document.getElementById('app').classList.add('visible');
+    loadBinder();
+  }, 900);
+}
+
+function initCoverSearch(){
+  const saved = loadLocal();
+  if (saved) binderState = normalizeLoaded(saved);
+  const input   = document.getElementById('coverSearchInput');
+  const results = document.getElementById('coverSearchResults');
+  if (!input || !results) return;
+  const runSearch = () => {
+    const q = input.value.trim().toLowerCase();
+    results.innerHTML = '';
+    results.classList.remove('has-results');
+    if (q.length < 2) return;
+    const hits = [];
+    binderState.pages.forEach((page, pageIdx) => {
+      page.forEach(card => {
+        if (!card) return;
+        const name = (card.name || card.customName || '').toLowerCase();
+        const set  = (card.set?.name || card.customSet || '').toLowerCase();
+        const num  = (card.number || '').toLowerCase();
+        if (name.includes(q) || set.includes(q) || num === q)
+          hits.push({ card, pageIdx });
+      });
+    });
+    if (!hits.length){
+      results.innerHTML = '<div class="csEmpty">No cards found in your binder</div>';
+      results.classList.add('has-results');
+      return;
+    }
+    hits.slice(0, 30).forEach(({ card, pageIdx }) => {
+      const img  = card.images?.small || card.images?.large || card.customImageUrl || '';
+      const name = card.name || card.customName || 'Unknown';
+      const set  = card.set?.name || card.customSet || '';
+      const num  = card.number || '';
+      const div = document.createElement('div');
+      div.className = 'csHit';
+      div.innerHTML = `
+        ${img ? `<img src="${escapeHtml(img)}" alt="" loading="lazy">` : '<div style="width:34px;flex-shrink:0;"></div>'}
+        <div class="cs-info">
+          <div class="cs-name">${escapeHtml(name)}</div>
+          <div class="cs-sub">${escapeHtml(set)}${num ? ' · #' + escapeHtml(num) : ''}</div>
+        </div>
+        <div class="cs-page">Page ${pageIdx + 1}</div>
+      `;
+      div.addEventListener('click', () => {
+        input.value = '';
+        results.innerHTML = '';
+        results.classList.remove('has-results');
+        openBinderToPage(pageIdx);
+      });
+      results.appendChild(div);
+    });
+    results.classList.add('has-results');
+  };
+  input.addEventListener('input', runSearch);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape'){ input.value = ''; results.innerHTML = ''; results.classList.remove('has-results'); }
+  });
+  document.addEventListener('click', e => {
+    if (!document.getElementById('coverSearch')?.contains(e.target)){
+      results.innerHTML = '';
+      results.classList.remove('has-results');
+    }
+  }, true);
+}
+initCoverSearch();
 
 /* ---------------------------------------------------------------------
    RENDERING — page flip
