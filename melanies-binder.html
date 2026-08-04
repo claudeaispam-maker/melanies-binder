@@ -1919,7 +1919,10 @@ async function doSearch(){
   try{
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-    let qStr = `name:${encodeURIComponent(q)}*`;
+    // Use raw name in Lucene query — encodeURIComponent on the full qStr handles URL encoding.
+    // Quoted phrase for multi-word names so Lucene treats them as one term, not two.
+    const nameQ = q.includes(' ') ? `name:"${q}"` : `name:${q}*`;
+    let qStr = nameQ;
     if (setFilter) qStr += ` ${setNameQ(setFilter)}`;
     const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(qStr)}&pageSize=30`;
     const res = await fetch(url, { headers });
@@ -3095,15 +3098,22 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
     });
     const done = () => returnAll ? candidates.length >= limit : false;
 
+    // Raw name helpers — do NOT pre-encode; tf() encodes the full query string.
+    // Multi-word: use quoted phrase (no trailing wildcard). Single-word: trailing wildcard.
+    const nameExact = `name:"${name}"`;
+    const nameWild  = name.includes(' ') ? `name:"${name}"` : `name:${name}*`;
+    const lastName  = name.split(' ').pop();
+    const lastWild  = `name:${lastName}*`;
+
     // --- McDonald's early pass ---
     if (set && /mcdonald/i.test(set)){
       if (numOnly){
-        const d = await tf(`name:"${name}" number:${numOnly} set.name:McDonald*`, 6);
+        const d = await tf(`${nameExact} number:${numOnly} set.name:McDonald*`, 6);
         if (!returnAll && d.length) return d[0];
         add(d);
       }
       if (!done()){
-        const d2 = await tf(`name:${encodeURIComponent(name)}* set.name:McDonald*`, 10);
+        const d2 = await tf(`${nameWild} set.name:McDonald*`, 10);
         if (!returnAll && d2.length) return d2[0];
         add(d2);
       }
@@ -3112,22 +3122,21 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
 
     // --- Pass 1: name + number + set ---
     if (!done() && numOnly && set){
-      const d = await tf(`name:"${name}" number:${numOnly} ${setNameQ(set)}`, 4);
+      const d = await tf(`${nameExact} number:${numOnly} ${setNameQ(set)}`, 4);
       if (!returnAll && d.length) return d[0];
       add(d);
     }
 
     // --- Pass 2: name + number ---
     if (!done() && numOnly){
-      const d = await tf(`name:"${name}" number:${numOnly}`, 4);
+      const d = await tf(`${nameExact} number:${numOnly}`, 4);
       if (!returnAll && d.length) return d[0];
       add(d);
     }
 
     // --- Pass 3: last word of name + number ---
     if (!done() && numOnly){
-      const last = name.split(' ').pop();
-      const d = await tf(`name:${encodeURIComponent(last)}* number:${numOnly}`, 8);
+      const d = await tf(`${lastWild} number:${numOnly}`, 8);
       if (!returnAll && d.length){
         return d.find(c => c.name.toLowerCase() === name.toLowerCase()) || d[0];
       }
@@ -3136,14 +3145,14 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
 
     // --- Pass 4: name + set ---
     if (!done() && set){
-      const d = await tf(`name:${encodeURIComponent(name)}* ${setNameQ(set)}`, 6);
+      const d = await tf(`${nameWild} ${setNameQ(set)}`, 6);
       if (!returnAll && d.length) return d[0];
       add(d);
     }
 
     // --- Pass 5: name only ---
     if (!done()){
-      const d = await tf(`name:${encodeURIComponent(name)}*`, 16);
+      const d = await tf(`${nameWild}`, 16);
       if (!returnAll && d.length){
         if (setShort){
           const hit = d.find(c => c.set?.name?.toLowerCase().includes(setShort));
@@ -3163,7 +3172,7 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
 
     // --- Pass 7: name + HP + set ---
     if (!done() && set && meta.hp){
-      const d = await tf(`name:${encodeURIComponent(name)}* hp:${meta.hp} ${setNameQ(set)}`, 6);
+      const d = await tf(`${nameWild} hp:${meta.hp} ${setNameQ(set)}`, 6);
       if (!returnAll && d.length) return d[0];
       add(d);
     }
@@ -3172,7 +3181,7 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
 
     // Fall through from pass 5 if it had results but no set match
     {
-      const d = await tf(`name:${encodeURIComponent(name)}*`, 4);
+      const d = await tf(`${nameWild}`, 4);
       if (d.length) return d[0];
     }
 
