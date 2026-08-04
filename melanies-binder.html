@@ -868,6 +868,8 @@ let binderState = {
   apiKey: "",
   anthropicKey: "",
   coverImage: null,
+  revealCooldown: 'none',  // 'none' | '1h' | '6h' | '24h' | 'daily'
+  lastRevealTime: null,    // ms timestamp of the last full card reveal
   pages: makeEmptyPages(PAGES_COUNT)
 };
 
@@ -943,7 +945,7 @@ async function loadBinder(){
 }
 
 function normalizeLoaded(data){
-  const out = { apiKey: data.apiKey || "", anthropicKey: data.anthropicKey || "", coverImage: data.coverImage || null, pages: [] };
+  const out = { apiKey: data.apiKey || "", anthropicKey: data.anthropicKey || "", coverImage: data.coverImage || null, revealCooldown: data.revealCooldown || 'none', lastRevealTime: data.lastRevealTime || null, pages: [] };
   const pages = Array.isArray(data.pages) ? data.pages : [];
   // use saved page count (variable), fall back to default if none saved
   const count = pages.length || PAGES_COUNT;
@@ -1269,6 +1271,41 @@ function renderGallery(){
    Fog resets on every page navigation since the DOM is rebuilt.
    ===================================================================== */
 
+/* =====================================================================
+   FOG REVEAL COOLDOWN
+   ===================================================================== */
+
+function canReveal(){
+  const mode = binderState.revealCooldown || 'none';
+  if (mode === 'none') return { ok: true };
+  const last = binderState.lastRevealTime;
+  if (!last) return { ok: true };
+  const now = Date.now();
+  if (mode === 'daily'){
+    const lastDate = new Date(last).toDateString();
+    if (lastDate !== new Date(now).toDateString()) return { ok: true };
+    const tomorrow = new Date(); tomorrow.setHours(24, 0, 0, 0);
+    return { ok: false, nextTime: tomorrow.getTime() };
+  }
+  const ms = { '1h': 3600000, '6h': 21600000, '24h': 86400000 }[mode] || 0;
+  const nextTime = last + ms;
+  return now >= nextTime ? { ok: true } : { ok: false, nextTime };
+}
+
+function formatRevealWait(nextTime){
+  const diff = Math.max(0, nextTime - Date.now());
+  const h = Math.floor(diff / 3600000);
+  const m = Math.ceil((diff % 3600000) / 60000);
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+function recordReveal(){
+  binderState.lastRevealTime = Date.now();
+  persist();
+}
+
 let fogMode = false; // true = fog canvases are added to all filled pockets
 
 /* drawFog — paints a layered frost effect onto a canvas element.
@@ -1314,14 +1351,14 @@ function drawFog(canvas){
 /* attachWipeListeners — wires mouse + touch events to a fog canvas so
    the user can drag to erase fog or tap to trigger onTap.
    onTap defaults to opening the detail panel; pass a custom fn to override
-   (e.g. the click-to-fully-reveal behaviour used in binder + gallery). */
+   (e.g. the click-to-fully-reveal behaviour used in binder + gallery).
+   When a reveal cooldown is configured, ALL interaction is blocked until
+   the cooldown expires — a toast shows the remaining wait time. */
 function attachWipeListeners(canvas, onTap){
   const pageIndex = parseInt(canvas.dataset.pageIdx);
   const slotIndex = parseInt(canvas.dataset.slotIdx);
   const handleTap = onTap || (() => openDetailPanel(pageIndex, slotIndex));
 
-  // Convert browser client coords → canvas pixel coords
-  // (needed because CSS scales the canvas element but pixel dimensions are fixed)
   const toCanvas = (clientX, clientY) => {
     const r = canvas.getBoundingClientRect();
     return {
@@ -1330,12 +1367,10 @@ function attachWipeListeners(canvas, onTap){
     };
   };
 
-  // Soft radial eraser — hard at centre, fades to transparent at edge
-  // so wipe strokes blend naturally rather than leaving hard circles
   const erase = (x, y) => {
     const ctx = canvas.getContext('2d');
-    const R   = Math.max(canvas.width, canvas.height) * 0.23; // brush ~23% of card size
-    ctx.globalCompositeOperation = 'destination-out'; // erases canvas pixels
+    const R   = Math.max(canvas.width, canvas.height) * 0.23;
+    ctx.globalCompositeOperation = 'destination-out';
     const g = ctx.createRadialGradient(x, y, 0, x, y, R);
     g.addColorStop(0,    'rgba(0,0,0,1)');
     g.addColorStop(0.55, 'rgba(0,0,0,0.85)');
@@ -1344,43 +1379,53 @@ function attachWipeListeners(canvas, onTap){
     ctx.beginPath();
     ctx.arc(x, y, R, 0, Math.PI * 2);
     ctx.fill();
-    ctx.globalCompositeOperation = 'source-over'; // always restore default mode
+    ctx.globalCompositeOperation = 'source-over';
   };
 
-  let moved = false, startX = 0, startY = 0;
+  let moved = false, startX = 0, startY = 0, active = false;
 
-  // Mouse
   canvas.addEventListener('mousedown', e => {
+    const check = canReveal();
+    if (!check.ok){
+      toast(`⏳ Next reveal in ${formatRevealWait(check.nextTime)}`);
+      return;
+    }
+    active = true;
     moved = false; startX = e.clientX; startY = e.clientY;
     erase(...Object.values(toCanvas(e.clientX, e.clientY)));
   });
   canvas.addEventListener('mousemove', e => {
-    if (!e.buttons) return;
-    // Mark as a drag once the cursor moves more than 4 px from start
+    if (!e.buttons || !active) return;
     if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
     erase(...Object.values(toCanvas(e.clientX, e.clientY)));
   });
   canvas.addEventListener('mouseup', () => {
-    if (!moved) handleTap();
-    moved = false;
+    if (active && !moved) handleTap();
+    moved = false; active = false;
   });
 
-  // Touch (passive:false lets us call e.preventDefault() to block scroll)
   canvas.addEventListener('touchstart', e => {
     e.preventDefault();
+    const check = canReveal();
+    if (!check.ok){
+      toast(`⏳ Next reveal in ${formatRevealWait(check.nextTime)}`);
+      return;
+    }
+    active = true;
     moved = false;
     const t = e.touches[0]; startX = t.clientX; startY = t.clientY;
     erase(...Object.values(toCanvas(t.clientX, t.clientY)));
   }, {passive: false});
   canvas.addEventListener('touchmove', e => {
     e.preventDefault();
+    if (!active) return;
     moved = true;
     const t = e.touches[0];
     erase(...Object.values(toCanvas(t.clientX, t.clientY)));
   }, {passive: false});
   canvas.addEventListener('touchend', () => {
-    if (!moved) handleTap();
-    moved = false;
+    if (active && !moved) handleTap();
+    moved = false; active = false;
   });
 }
 
@@ -1397,6 +1442,7 @@ function initFogCanvases(face){
     const clearFog = () => {
       canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
       canvas.remove();
+      recordReveal();
     };
     attachWipeListeners(canvas, clearFog);
   });
@@ -1422,6 +1468,7 @@ function initGalleryFogCanvases(){
     const clearFog = () => {
       canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
       canvas.remove();
+      recordReveal();
     };
     attachWipeListeners(canvas, clearFog);
   });
@@ -4018,16 +4065,28 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
       Get a key at <span style="color:#555">console.anthropic.com</span>. Requires a billing balance — used to identify cards from your photos. Stored only on this device.
     </p>
     <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+    <label style="font-size:12px;color:#555;font-weight:600;display:block;margin-bottom:4px;">🌫 Fog Reveal Cooldown</label>
+    <p style="font-size:12px;color:#888;margin:0 0 8px;">Limit how often a single card can be fully revealed by clicking.</p>
+    <select id="revealCooldownSelect" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #ccc;font-size:13px;background:#fff;color:#222;">
+      <option value="none">No limit — reveal anytime</option>
+      <option value="1h">Once per hour</option>
+      <option value="6h">Once every 6 hours</option>
+      <option value="24h">Once every 24 hours</option>
+      <option value="daily">Once per day (resets at midnight)</option>
+    </select>
+    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
     <p style="font-size:12px;color:#888;">
       Cloud sync: ${firebaseReady ? '<span style="color:green">✓ connected to Firebase</span>' : '<span style="color:#a55">not configured — using local storage on this device only.</span>'}
     </p>
     <button class="primary" id="saveSettingsBtn">Save</button>
     <div class="closeRow"><button class="secondary" id="closeSettingsBtn">Close</button></div>
   `);
+  document.getElementById('revealCooldownSelect').value = binderState.revealCooldown || 'none';
   document.getElementById('generateShareBtn').addEventListener('click', shareCollection);
   document.getElementById('saveSettingsBtn').addEventListener('click', () => {
     binderState.apiKey = document.getElementById('apiKeyInput').value.trim();
     binderState.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
+    binderState.revealCooldown = document.getElementById('revealCooldownSelect').value;
     persist();
     hideOverlay();
     toast('Settings saved.');
