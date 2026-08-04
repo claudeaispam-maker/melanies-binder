@@ -1887,16 +1887,74 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
   });
 }
 
+// --- TCGDex: multilingual Pokémon card API (Japanese, Chinese, etc.) ---
+let searchLang = 'en'; // active language in the search panel
+
+function normalizeTCGDexCard(card, lang){
+  const setId   = card.set?.id   || card.id.split('-')[0];
+  const localId = card.localId   || card.id.split('-').slice(1).join('-');
+  const imgBase = `https://assets.tcgdex.net/${lang}/${setId}/${localId}`;
+  const flag    = lang === 'ja' ? ' 🇯🇵' : lang.startsWith('zh') ? ' 🇨🇳' : '';
+  return {
+    id: `tcgdex-${card.id}`,
+    name: (card.name || '') + flag,
+    number: localId,
+    rarity: card.rarity || '',
+    supertype: card.category || 'Pokémon',
+    subtypes: card.stage ? [card.stage] : [],
+    hp: card.hp ? String(card.hp) : '',
+    artist: card.illustrator || '',
+    set: {
+      id: setId,
+      name: (card.set?.name || setId) + flag,
+      series: card.set?.serie?.name || '',
+      total: card.set?.cardCount?.total || 0,
+      images: { symbol: '', logo: '' }
+    },
+    images: {
+      small: `${imgBase}/low.webp`,
+      large: `${imgBase}/high.webp`
+    },
+    _lang: lang,
+    _source: 'tcgdex'
+  };
+}
+
+async function searchTCGDex(name, lang = 'ja'){
+  try{
+    const r = await fetch(`https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(name)}`);
+    if (!r.ok) return [];
+    const list = await r.json();
+    if (!Array.isArray(list) || !list.length) return [];
+    const details = await Promise.all(
+      list.slice(0, 8).map(c =>
+        fetch(`https://api.tcgdex.net/v2/${lang}/cards/${encodeURIComponent(c.id)}`)
+          .then(r2 => r2.ok ? r2.json() : null)
+          .catch(() => null)
+      )
+    );
+    return details.filter(Boolean).map(c => normalizeTCGDexCard(c, lang));
+  }catch(e){ return []; }
+}
+
 /* openSearchPanel — search the TCG API by card name and place result in a slot.
    prefillName pre-fills the input and triggers an auto-search.
    Optional set filter narrows results to a specific set. */
 function openSearchPanel(pageIndex, slotIndex, prefillName = ''){
   pendingPickSlotRef = { pageIndex, slotIndex };
+  searchLang = 'en';
   showOverlay(`
     <h2>🔍 Find a Card</h2>
     <input type="text" id="searchInput" placeholder="Card name, e.g. Charizard"
            value="${escapeHtml(prefillName)}" autocorrect="off">
-    <input type="text" id="searchSetFilter" placeholder="Set filter (optional), e.g. Base Set"
+    <div style="display:flex;gap:4px;align-items:center;margin-top:4px;flex-wrap:wrap;">
+      <span style="font-size:11px;color:#888;white-space:nowrap;">Language:</span>
+      <button class="primary"   id="langEN"  style="padding:2px 8px;font-size:11px;">EN</button>
+      <button class="secondary" id="langJA"  style="padding:2px 8px;font-size:11px;">JA 🇯🇵</button>
+      <button class="secondary" id="langZH"  style="padding:2px 8px;font-size:11px;">ZH 🇨🇳</button>
+      <button class="secondary" id="langZHT" style="padding:2px 8px;font-size:11px;">繁中 🇹🇼</button>
+    </div>
+    <input type="text" id="searchSetFilter" placeholder="Set filter (optional, EN only)"
            autocorrect="off" style="margin-top:4px;font-size:13px;color:#555;">
     <div style="display:flex;gap:8px;margin-top:6px;">
       <button class="primary" id="searchGoBtn" style="flex:1;">Search</button>
@@ -1910,6 +1968,18 @@ function openSearchPanel(pageIndex, slotIndex, prefillName = ''){
   document.getElementById('searchSetFilter').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   document.getElementById('searchGoBtn').addEventListener('click', doSearch);
   document.getElementById('searchCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+
+  const langMap = { langEN: 'en', langJA: 'ja', langZH: 'zh-Hans', langZHT: 'zh-Hant' };
+  Object.entries(langMap).forEach(([id, lang]) => {
+    document.getElementById(id).addEventListener('click', () => {
+      searchLang = lang;
+      Object.keys(langMap).forEach(k =>
+        document.getElementById(k).className = k === id ? 'primary' : 'secondary'
+      );
+      if (document.getElementById('searchInput').value.trim()) doSearch();
+    });
+  });
+
   if (prefillName) doSearch();
 }
 
@@ -1920,11 +1990,42 @@ async function doSearch(){
   if (!q){ resultsGrid.innerHTML = '<div class="emptyMsg">Type a card name to search.</div>'; return; }
   resultsGrid.innerHTML = '<div class="loadingMsg">Searching…</div>';
 
+  const renderCard = (card) => {
+    const el = document.createElement('div');
+    el.className = 'resultCard';
+    el.innerHTML = `<img src="${card.images?.small || card.images?.large || ''}" alt="${escapeHtml(card.name)}">
+      <div>${escapeHtml(card.name)}</div>
+      <div style="color:#999;font-size:10px;">${escapeHtml(card.set ? card.set.name : '')} #${escapeHtml(card.number||'')}</div>`;
+    el.addEventListener('click', () => {
+      const ref = pendingPickSlotRef;
+      if (!ref) return;
+      openCardConfirmPanel(card, ref.pageIndex, ref.slotIndex,
+        () => openSearchPanel(ref.pageIndex, ref.slotIndex, q));
+    });
+    resultsGrid.appendChild(el);
+  };
+
+  // Non-English: use TCGDex API
+  if (searchLang !== 'en'){
+    try{
+      const cards = await searchTCGDex(q, searchLang);
+      if (!cards.length){
+        resultsGrid.innerHTML = '<div class="emptyMsg">No cards found. Try the English name and switch to EN.</div>';
+        return;
+      }
+      resultsGrid.innerHTML = '';
+      cards.forEach(renderCard);
+    }catch(e){
+      console.warn(e);
+      resultsGrid.innerHTML = '<div class="emptyMsg">Search failed. Check your connection.</div>';
+    }
+    return;
+  }
+
+  // English: use pokemontcg.io
   try{
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
-    // Use raw name in Lucene query — encodeURIComponent on the full qStr handles URL encoding.
-    // Quoted phrase for multi-word names so Lucene treats them as one term, not two.
     const nameQ = q.includes(' ') ? `name:"${q}"` : `name:${q}*`;
     let qStr = nameQ;
     if (setFilter) qStr += ` ${setNameQ(setFilter)}`;
@@ -1950,20 +2051,6 @@ async function doSearch(){
     const promoExtras = mainCards.length ? promoCards : [];
 
     resultsGrid.innerHTML = '';
-    const renderCard = (card) => {
-      const el = document.createElement('div');
-      el.className = 'resultCard';
-      el.innerHTML = `<img src="${card.images.small}" alt="${escapeHtml(card.name)}">
-        <div>${escapeHtml(card.name)}</div>
-        <div style="color:#999;font-size:10px;">${escapeHtml(card.set ? card.set.name : '')} #${escapeHtml(card.number||'')}</div>`;
-      el.addEventListener('click', () => {
-        const ref = pendingPickSlotRef;
-        if (!ref) return;
-        openCardConfirmPanel(card, ref.pageIndex, ref.slotIndex,
-          () => openSearchPanel(ref.pageIndex, ref.slotIndex, q));
-      });
-      resultsGrid.appendChild(el);
-    };
     cards.forEach(renderCard);
     if (promoExtras.length){
       const hdr = document.createElement('div');
@@ -3062,11 +3149,13 @@ async function identifySingleCard(imageDataUrl, apiKey){
 6. SUPERTYPE — exactly one of: "Pokémon", "Trainer", "Energy"
 7. SUBTYPES — stage or variant printed on card (e.g. "Basic", "Stage 1", "GX", "V", "VMAX", "VSTAR", "ex", "EX", "Item", "Supporter", "Stadium")
 8. ARTIST — illustrator credit at card bottom (e.g. "Mitsuhiro Arita"), empty string if unreadable
+9. LANG — card language: "en" (English), "ja" (Japanese), "zh-Hans" (Simplified Chinese), "zh-Hant" (Traditional Chinese)
+10. NAME_EN — if card is non-English, your best guess at the English equivalent name (e.g. ピカチュウ → "Pikachu"); empty string for English cards
 
 Respond ONLY with valid JSON, no markdown, no explanation:
-{"name":"Blaine's Charmander","number":"61/132","set":"Gym Challenge","rarity":"Common","hp":"70","supertype":"Pokémon","subtypes":"Basic","artist":"Mitsuhiro Arita","confidence":"high"}
+{"name":"Blaine's Charmander","number":"61/132","set":"Gym Challenge","rarity":"Common","hp":"70","supertype":"Pokémon","subtypes":"Basic","artist":"Mitsuhiro Arita","lang":"en","name_en":"","confidence":"high"}
 
-If card is unreadable: {"name":"unknown","number":"","set":"","rarity":"","hp":"","supertype":"","subtypes":"","artist":"","confidence":"low"}` }
+If card is unreadable: {"name":"unknown","number":"","set":"","rarity":"","hp":"","supertype":"","subtypes":"","artist":"","lang":"en","name_en":"","confidence":"low"}` }
         ]
       }]
     })
@@ -3100,11 +3189,19 @@ async function processSingleCardFile(file, pageIndex, slotIndex){
     }
 
     showLoading('Matching card data…');
-    const candidates = await searchTCGForCard(
-      guess.name, guess.set, guess.number,
-      { artist: guess.artist, hp: guess.hp },
-      { returnAll: true, limit: 6 }
-    );
+    const isNonEn    = guess.lang && guess.lang !== 'en';
+    const searchName = isNonEn ? (guess.name_en || guess.name) : guess.name;
+    const [enCands, jaCands] = await Promise.all([
+      searchTCGForCard(searchName, guess.set, guess.number,
+        { artist: guess.artist, hp: guess.hp, lang: guess.lang },
+        { returnAll: true, limit: isNonEn ? 4 : 6 }),
+      isNonEn ? searchTCGDex(guess.name, guess.lang) : Promise.resolve([])
+    ]);
+    const seenIds = new Set((enCands || []).map(c => c.id));
+    const candidates = [
+      ...(enCands || []),
+      ...(jaCands || []).filter(c => !seenIds.has(c.id))
+    ].slice(0, 6);
     hideLoading();
     openCandidatePicker(candidates, pageIndex, slotIndex, guess);
 
@@ -3412,6 +3509,13 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
       );
       if (!returnAll && hits.length) return hits[0];
       add(hits);
+    }
+
+    // --- Non-English fallback: search TCGDex ---
+    if (!done() && meta.lang && meta.lang !== 'en'){
+      const tcgdexCards = await searchTCGDex(name, meta.lang);
+      if (!returnAll && tcgdexCards.length) return tcgdexCards[0];
+      add(tcgdexCards);
     }
 
     if (returnAll) return candidates;
