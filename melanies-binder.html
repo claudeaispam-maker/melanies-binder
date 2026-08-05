@@ -655,11 +655,19 @@
      Shows pages as a two-page book spread with a 3-D flip animation.
      ============================================== */
   #landscapeBook{
-    display:none; position:relative; overflow:hidden;
+    display:none; position:relative;
     flex:1; perspective:1800px;
+    /* NO overflow:hidden — iOS Safari flattens preserve-3d when any ancestor
+       has overflow:hidden, breaking the 3-D flip. Clipping is handled by
+       #lsContentArea below which wraps only the static pages (not the flipper). */
   }
   #app.landscape-mode #landscapeBook{ display:flex; }
   #app.landscape-mode #binderWrap   { display:none; }
+  /* Clips static page content without being an ancestor of the 3-D flipper */
+  #lsContentArea{
+    position:absolute; inset:0; display:flex; overflow:hidden; pointer-events:none;
+  }
+  #lsContentArea > *{ pointer-events:auto; }
 
   .lsPage{
     flex:1; display:flex; flex-direction:column;
@@ -688,7 +696,8 @@
   /* ---- Flipper (3-D turning page) ---- */
   #lsFlipper{
     position:absolute; top:0; bottom:0;
-    display:none; transform-style:preserve-3d;
+    visibility:hidden; pointer-events:none;
+    -webkit-transform-style:preserve-3d; transform-style:preserve-3d;
     z-index:20;
   }
   #lsFlipper.flip-right{ left:calc(50% + 8px); right:0; transform-origin:left center; }
@@ -698,7 +707,9 @@
     position:absolute; inset:0;
     backface-visibility:hidden; -webkit-backface-visibility:hidden;
     background:linear-gradient(135deg, var(--page) 0%, #f0e9de 100%);
-    overflow:hidden; display:flex; flex-direction:column; padding:4px;
+    /* NO overflow:hidden — iOS Safari collapses the preserve-3d stacking context
+       when any descendant of a perspective container has overflow:hidden. */
+    display:flex; flex-direction:column; padding:4px;
   }
   #lsFlipBack{ transform:rotateY(180deg); }
 
@@ -728,6 +739,7 @@
     font-size:18px; cursor:pointer;
     padding:3px 6px; line-height:1; border-radius:6px;
     transition:color .12s, background .12s;
+    touch-action:manipulation;
   }
   .lsNavBtn:disabled{ opacity:.18; cursor:default; }
   .lsNavBtn:not(:disabled):hover{ color:#fff; background:rgba(255,255,255,0.12); }
@@ -967,12 +979,14 @@
        Presents both facing pages as a book spread with a 3-D page-turn animation.
        ================================================= -->
   <div id="landscapeBook">
-    <div id="lsLeft" class="lsPage">
-      <div class="lsPageInner" id="lsLeftInner"></div>
-    </div>
-    <div id="lsSpine"></div>
-    <div id="lsRight" class="lsPage">
-      <div class="lsPageInner" id="lsRightInner"></div>
+    <div id="lsContentArea">
+      <div id="lsLeft" class="lsPage">
+        <div class="lsPageInner" id="lsLeftInner"></div>
+      </div>
+      <div id="lsSpine"></div>
+      <div id="lsRight" class="lsPage">
+        <div class="lsPageInner" id="lsRightInner"></div>
+      </div>
     </div>
     <!-- Animated flipper overlay — the page that "turns" -->
     <div id="lsFlipper">
@@ -1895,11 +1909,12 @@ function flipSpread(dir){
     flipper.className        = 'flip-right';
     flipper.style.transition = 'none';
     flipper.style.transform  = 'rotateY(0deg)';
-    flipper.style.display    = 'flex';
-    flipper.offsetWidth; // force reflow before transition
-
-    flipper.style.transition = 'transform .6s cubic-bezier(0.645,0.045,0.355,1.000)';
-    flipper.style.transform  = 'rotateY(-180deg)';
+    flipper.style.visibility    = 'visible';
+    flipper.style.pointerEvents = 'auto';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      flipper.style.transition = 'transform .6s cubic-bezier(0.645,0.045,0.355,1.000)';
+      flipper.style.transform  = 'rotateY(-180deg)';
+    }));
 
   } else {
     // Backward: left page flips to the right.
@@ -1913,21 +1928,22 @@ function flipSpread(dir){
     flipper.className        = 'flip-left';
     flipper.style.transition = 'none';
     flipper.style.transform  = 'rotateY(0deg)';
-    flipper.style.display    = 'flex';
-    flipper.offsetWidth;
-
-    flipper.style.transition = 'transform .6s cubic-bezier(0.645,0.045,0.355,1.000)';
-    flipper.style.transform  = 'rotateY(180deg)';
+    flipper.style.visibility    = 'visible';
+    flipper.style.pointerEvents = 'auto';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      flipper.style.transition = 'transform .6s cubic-bezier(0.645,0.045,0.355,1.000)';
+      flipper.style.transform  = 'rotateY(180deg)';
+    }));
   }
 
   const finish = () => {
-    flipper.ontransitionend = null;
     // Swap the remaining static panel to the new page
     if (dir === 1) buildSpreadContent(lsLeft,  nli);
     else           buildSpreadContent(lsRight, nri);
     // Hide flipper and reset state
-    flipper.style.transition = 'none';
-    flipper.style.display    = 'none';
+    flipper.style.transition    = 'none';
+    flipper.style.visibility    = 'hidden';
+    flipper.style.pointerEvents = 'none';
     flipper.className        = '';
     spreadIndex    = newIdx;
     currentSpread  = spreadIndex * 2;
@@ -1938,9 +1954,8 @@ function flipSpread(dir){
     if (fogMode) setTimeout(() => initFogCanvases(book), 60);
   };
 
-  flipper.ontransitionend = finish;
-  // Safety fallback in case ontransitionend doesn't fire
-  setTimeout(() => { if (lsFlipping) finish(); }, 750);
+  flipper.addEventListener('transitionend', finish, { once: true });
+  setTimeout(() => { if (lsFlipping) finish(); }, 900);
 }
 
 /* initLandscapeMode — wires nav buttons, swipe gestures, and orientation events.
@@ -1967,7 +1982,7 @@ function initLandscapeMode(){
 
   // React to orientation changes and window resizes
   window.addEventListener('resize',            checkSpreadMode);
-  window.addEventListener('orientationchange', () => setTimeout(checkSpreadMode, 120));
+  window.addEventListener('orientationchange', () => setTimeout(checkSpreadMode, 400));
 
   // Initial check — delayed so binderState is populated first
   setTimeout(checkSpreadMode, 260);
