@@ -235,6 +235,37 @@
       font-size: 11px; color: rgba(255,255,255,0.22);
       border-top: 1px solid rgba(255,255,255,0.06);
     }
+
+    /* ── Daily card view ── */
+    #dailyView {
+      display: none; flex-direction: column; align-items: center;
+      padding: 8px 16px 40px; gap: 0;
+    }
+    .dailyLabel {
+      font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+      color: rgba(255,255,255,0.3); margin-bottom: 20px;
+    }
+    #dailyCardWrap {
+      width: min(72vw, 240px);
+      border-radius: 10px; overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.65);
+      background: rgba(255,255,255,0.06);
+      margin-bottom: 20px;
+    }
+    #dailyCardImg { width: 100%; display: block; }
+    #dailyCardMeta { padding: 10px 13px 14px; }
+    #dailyCardName { font-size: 14px; font-weight: 700; color: #f0d080; margin-bottom: 3px; }
+    #dailyCardSet  { font-size: 11px; color: rgba(255,255,255,0.45); margin-bottom: 6px; }
+    #dailyCardPrice{ font-size: 13px; font-weight: 700; color: #ffe066; }
+    #dailyTimerBox { text-align: center; margin-bottom: 14px; }
+    #dailyTimerLabel{ font-size: 11px; color: rgba(255,255,255,0.3); margin-bottom: 5px; }
+    #dailyTimer {
+      font-size: 28px; font-weight: 700;
+      color: rgba(255,255,255,0.65);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 3px;
+    }
+    #dailyOfTotal { font-size: 11px; color: rgba(255,255,255,0.2); }
   </style>
 </head>
 <body>
@@ -282,6 +313,24 @@
 
   <div id="pageDots"></div>
 
+  <!-- Daily card view — shown instead of page nav when data.dailyCard is true -->
+  <div id="dailyView">
+    <div class="dailyLabel">🎴 Card of the Day</div>
+    <div id="dailyCardWrap">
+      <img id="dailyCardImg" src="" alt="" loading="lazy">
+      <div id="dailyCardMeta">
+        <div id="dailyCardName"></div>
+        <div id="dailyCardSet"></div>
+        <div id="dailyCardPrice"></div>
+      </div>
+    </div>
+    <div id="dailyTimerBox">
+      <div id="dailyTimerLabel">Next card in</div>
+      <div id="dailyTimer">00:00:00</div>
+    </div>
+    <div id="dailyOfTotal"></div>
+  </div>
+
   <div id="viewerFooter">
     Shared from <strong>Loui's Binder</strong> · Read only
   </div>
@@ -327,6 +376,46 @@ function showError(msg){
   document.getElementById('errorMsg').textContent      = msg;
 }
 
+/* ── Daily card helpers ── */
+
+function getDailyIndex(total){
+  const str = new Date().toDateString();
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % total;
+}
+
+function renderDailyCard(){
+  const allCards = [];
+  data.pages.forEach(page => page.forEach(slot => { if (slot) allCards.push(slot); }));
+  if (!allCards.length){ showError('No cards in this shared binder.'); return; }
+
+  const card = allCards[getDailyIndex(allCards.length)];
+
+  document.getElementById('dailyCardImg').src          = card.image;
+  document.getElementById('dailyCardImg').alt          = card.name;
+  document.getElementById('dailyCardName').textContent = card.name;
+  document.getElementById('dailyCardSet').textContent  = card.set || '';
+  document.getElementById('dailyCardPrice').textContent= card.price != null
+    ? '$' + Number(card.price).toFixed(2) : '';
+  document.getElementById('dailyOfTotal').textContent  =
+    `From a collection of ${allCards.length} card${allCards.length !== 1 ? 's' : ''}`;
+
+  document.getElementById('dailyView').style.display = 'flex';
+
+  function tick(){
+    const now  = new Date();
+    const next = new Date(); next.setHours(24, 0, 0, 0);
+    const diff = Math.max(0, next - now);
+    const h = String(Math.floor(diff / 3600000)).padStart(2, '0');
+    const m = String(Math.floor((diff % 3600000) / 60000)).padStart(2, '0');
+    const s = String(Math.floor((diff % 60000) / 1000)).padStart(2, '0');
+    document.getElementById('dailyTimer').textContent = `${h}:${m}:${s}`;
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+
 /* ── Build the full viewer after decode ── */
 function renderViewer(){
   document.getElementById('loadingView').style.display  = 'none';
@@ -360,6 +449,15 @@ function renderViewer(){
     `<span><span class="sumDot owned"></span>${owned} owned</span>` +
     `<span><span class="sumDot missing"></span>${missing} missing</span>` +
     `<span style="color:rgba(255,255,255,0.3)">${total} cards · ${data.pages.length} pages</span>`;
+
+  // Daily card mode — hide navigation, show single-card view
+  if (data.dailyCard){
+    document.getElementById('pageNav').style.display     = 'none';
+    document.getElementById('pageSection').style.display = 'none';
+    document.getElementById('pageDots').style.display    = 'none';
+    renderDailyCard();
+    return;
+  }
 
   // Build page dot navigation
   const dotsEl = document.getElementById('pageDots');

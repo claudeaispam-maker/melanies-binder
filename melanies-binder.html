@@ -3956,57 +3956,129 @@ async function compressAndEncode(obj){
   return btoa(binary);
 }
 
-/* buildSharePayload — strips private data (API keys, verbose priceDetails)
-   from binderState and returns a clean object safe to embed in a public URL.
-   coverImage is included only when it's a URL or a small enough base64 string
-   (> 200 000 chars would make the URL too long on most platforms). */
-function buildSharePayload(){
+/* buildSharePayload — strips private data from binderState and returns a
+   clean object safe to embed in a public URL. opts controls what's included:
+   filter ('all'|'owned'|'missing'), includePrices, includeCover, dailyCard. */
+function buildSharePayload(opts){
+  const { filter = 'all', includePrices = true, includeCover = true, dailyCard = false } = opts || {};
   const cover = binderState.coverImage;
   return {
     v:          1,
     title:      "Melanie's Binder",
-    coverImage: (!cover || cover.length > 200000) ? null : cover,
+    coverImage: (includeCover && cover && cover.length <= 200000) ? cover : null,
     sharedAt:   new Date().toISOString(),
+    dailyCard:  dailyCard,
     pages: binderState.pages.map(page =>
-      page.map(slot => slot ? {
-        name:      slot.name,
-        image:     slot.image,
-        set:       slot.set      || '',
-        owned:     slot.owned,
-        quantity:  slot.quantity || 1,
-        condition: slot.condition || '',
-        price:     slot.price    ?? null
-        // stripped: cardId, notes, priceDetails, apiKey, anthropicKey
-      } : null)
+      page.map(slot => {
+        if (!slot) return null;
+        if (filter === 'owned'   && !slot.owned) return null;
+        if (filter === 'missing' &&  slot.owned) return null;
+        return {
+          name:      slot.name,
+          image:     slot.image,
+          set:       slot.set      || '',
+          owned:     slot.owned,
+          quantity:  slot.quantity || 1,
+          condition: slot.condition || '',
+          price:     includePrices ? (slot.price ?? null) : null
+        };
+      })
     )
   };
 }
 
-/* shareCollection — builds the share URL and hands off to showSharePanel. */
-async function shareCollection(){
-  const btn = document.getElementById('generateShareBtn');
-  if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
-  try {
-    const encoded  = await compressAndEncode(buildSharePayload());
-    // binder-share.html lives in the same GitHub Pages repo
-    const base     = 'https://claudeaispam-maker.github.io/melanies-binder/binder-share.html';
-    const url      = `${base}#${encoded}`;
-    showSharePanel(url);
-  } catch(e){
-    if (btn){ btn.disabled = false; btn.textContent = 'Generate Share Link'; }
-    toast('Could not generate link: ' + (e.message || e));
-  }
+/* openShareOptions — shows a parameter selection panel so the user can
+   customise the share link before it's generated. */
+function openShareOptions(){
+  showOverlay(`
+    <h2>🔗 Share Options</h2>
+    <p style="font-size:13px;color:#666;margin:0 0 14px;">Customise what's included in the shared view.</p>
+
+    <label style="font-size:12px;font-weight:600;color:#444;display:block;margin-bottom:6px;">Cards to include</label>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;padding-left:4px;">
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="radio" name="shareFilter" value="all" checked> All cards
+      </label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="radio" name="shareFilter" value="owned"> Owned cards only
+      </label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="radio" name="shareFilter" value="missing"> Missing cards only
+      </label>
+    </div>
+
+    <label style="font-size:12px;font-weight:600;color:#444;display:block;margin-bottom:6px;">Include in link</label>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;padding-left:4px;">
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="soIncludePrices" checked> Card prices
+      </label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="soIncludeCover" checked> Cover photo
+      </label>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+
+    <label style="font-size:12px;font-weight:600;color:#444;display:block;margin-bottom:8px;">Viewer mode</label>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px;padding-left:4px;">
+      <label style="font-size:13px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+        <input type="radio" name="shareMode" value="full" checked style="margin-top:2px;flex-shrink:0;">
+        <span>
+          <strong>Full binder</strong><br>
+          <span style="font-size:11px;color:#888;">Recipient can browse all pages</span>
+        </span>
+      </label>
+      <label style="font-size:13px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+        <input type="radio" name="shareMode" value="daily" style="margin-top:2px;flex-shrink:0;">
+        <span>
+          <strong>🎴 Card of the Day</strong><br>
+          <span style="font-size:11px;color:#888;">Shows one random card per day — same card for all viewers, resets at midnight</span>
+        </span>
+      </label>
+    </div>
+
+    <button class="primary" id="soGenerateBtn" style="width:100%;">Generate Link</button>
+    <div class="closeRow"><button class="secondary" id="soCancelBtn">Cancel</button></div>
+  `);
+
+  document.getElementById('soGenerateBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('soGenerateBtn');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    const opts = {
+      filter:        document.querySelector('input[name="shareFilter"]:checked').value,
+      includePrices: document.getElementById('soIncludePrices').checked,
+      includeCover:  document.getElementById('soIncludeCover').checked,
+      dailyCard:     document.querySelector('input[name="shareMode"]:checked').value === 'daily'
+    };
+    try {
+      const encoded = await compressAndEncode(buildSharePayload(opts));
+      const base    = 'https://claudeaispam-maker.github.io/melanies-binder/binder-share.html';
+      showSharePanel(`${base}#${encoded}`, opts);
+    } catch(e){
+      btn.disabled = false; btn.textContent = 'Generate Link';
+      toast('Could not generate link: ' + (e.message || e));
+    }
+  });
+  document.getElementById('soCancelBtn').addEventListener('click', hideOverlay);
 }
 
 /* showSharePanel — replaces the overlay content with the finished link
    and auto-copies it to the clipboard. */
-function showSharePanel(url){
-  const total = binderState.pages.reduce((n,p) => n + p.filter(Boolean).length, 0);
-  const pages = binderState.pages.length;
+function showSharePanel(url, opts){
+  opts = opts || {};
+  const filter = opts.filter || 'all';
+  const allSlots = binderState.pages.flatMap(p => p.filter(Boolean));
+  const included = allSlots.filter(s =>
+    filter === 'all' ? true : filter === 'owned' ? s.owned : !s.owned
+  );
+  const total    = included.length;
+  const pages    = binderState.pages.length;
+  const modeNote = opts.dailyCard ? '🎴 Card of the Day mode' : 'Full binder';
+  const filterNote = filter === 'owned' ? 'owned cards only' : filter === 'missing' ? 'missing cards only' : 'all cards';
   showOverlay(`
     <h2>🔗 Share Binder</h2>
     <p style="font-size:13px;color:#555;margin:0 0 12px 0;">
-      Anyone with this link can view your full collection — read only, no login needed.
+      Anyone with this link can view your collection — read only, no login needed.
     </p>
     <div style="display:flex;gap:6px;align-items:stretch;">
       <input type="text" id="shareUrlInput" value="${escapeHtml(url)}" readonly
@@ -4017,7 +4089,7 @@ function showSharePanel(url){
       </button>
     </div>
     <p style="font-size:11px;color:#aaa;margin:8px 0 0 0;">
-      Includes ${total} card${total!==1?'s':''} across ${pages} page${pages!==1?'s':''}.
+      ${total} card${total!==1?'s':''} · ${filterNote} · ${modeNote}
     </p>
     <div class="closeRow"><button class="secondary" id="closeShareBtn">Close</button></div>
   `);
@@ -4082,7 +4154,7 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
     <div class="closeRow"><button class="secondary" id="closeSettingsBtn">Close</button></div>
   `);
   document.getElementById('revealCooldownSelect').value = binderState.revealCooldown || 'none';
-  document.getElementById('generateShareBtn').addEventListener('click', shareCollection);
+  document.getElementById('generateShareBtn').addEventListener('click', openShareOptions);
   document.getElementById('saveSettingsBtn').addEventListener('click', () => {
     binderState.apiKey = document.getElementById('apiKeyInput').value.trim();
     binderState.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
