@@ -796,7 +796,7 @@
   }
   #cvCardOwned.owned  { background:rgba(80,180,100,0.2); color:#7ecb8f; }
   #cvCardOwned.missing{ background:rgba(220,80,80,0.2);  color:#e08888; }
-  #cvActions{ margin-top:14px; display:flex; gap:10px; }
+  #cvActions{ margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
   .cvBtn{
     background:rgba(255,255,255,0.1);
     border:1px solid rgba(255,255,255,0.18);
@@ -1038,6 +1038,8 @@
     </div>
     <div id="cvActions">
       <button class="cvBtn cvPrimary" id="cvEditBtn">&#9998; Edit card</button>
+      <button class="cvBtn" id="cvEbayBtn">🛒 eBay Price</button>
+      <button class="cvBtn" id="cvWaifuBtn">📊 WaifuCards</button>
       <button class="cvBtn" id="cvClose2Btn">Close</button>
     </div>
   </div>
@@ -2322,6 +2324,16 @@ function openCardViewer(pageIndex, slotIndex){
     owEl.textContent = 'Missing'; owEl.className = 'missing';
   }
 
+  // Wire price-search buttons to this specific card each time the viewer opens
+  const cardName = slot.name || '';
+  document.getElementById('cvEbayBtn').onclick = () => {
+    const q = encodeURIComponent(cardName + ' kayou my little pony');
+    window.open(`https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1`, '_blank');
+  };
+  document.getElementById('cvWaifuBtn').onclick = () => {
+    window.open(`https://waifucards.app/sets/mlp?lang=en`, '_blank');
+  };
+
   const v = document.getElementById('cardViewer');
   v.style.display = 'flex';
   requestAnimationFrame(() => v.classList.add('cv-open'));
@@ -2413,9 +2425,12 @@ function openSlotOptions(pageIndex, slotIndex){
   showOverlay(`
     <h2 style="margin-bottom:4px;">Slot ${slotLabel} — Add a card</h2>
     <p style="font-size:12px;color:#888;margin:0 0 14px;">Page ${pageIndex + 1} · slot ${slotLabel} of 9</p>
+    <button class="primary" id="snapPhotoBtn" style="width:100%;padding:13px;font-size:14px;margin-bottom:8px;">
+      📷 Snap a Photo / Upload Image
+    </button>
     ${hasScanKey ? `
-    <button class="primary" id="scanSlotBtn" style="width:100%;padding:13px;font-size:14px;margin-bottom:8px;">
-      📷 Upload or Scan Card
+    <button class="secondary" id="scanSlotBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
+      🤖 AI Scan Card (Pokémon API)
     </button>` : ''}
     <button class="secondary" id="searchSlotBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
       🔍 Search by card name
@@ -2434,6 +2449,29 @@ function openSlotOptions(pageIndex, slotIndex){
   document.getElementById('searchSlotBtn').addEventListener('click', () => openSearchPanel(pageIndex, slotIndex));
   document.getElementById('promoSlotBtn').addEventListener('click', () => openPromoSearch(pageIndex, slotIndex));
   document.getElementById('customSlotBtn').addEventListener('click', () => openCustomCardPanel(pageIndex, slotIndex));
+
+  document.getElementById('snapPhotoBtn').addEventListener('click', () => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.capture = 'environment';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', async () => {
+      const file = inp.files[0];
+      document.body.removeChild(inp);
+      if (!file) return;
+      const rawUrl  = await fileToDataUrl(file);
+      const resized = await resizeImage(rawUrl, 800);
+      openImageCropper(
+        resized,
+        (croppedUrl) => openCustomCardPanel(pageIndex, slotIndex, { image: croppedUrl }),
+        ()           => openSlotOptions(pageIndex, slotIndex)
+      );
+    });
+    inp.click();
+  });
+
   if (hasScanKey){
     document.getElementById('scanSlotBtn').addEventListener('click', () => {
       hideOverlay();
