@@ -701,6 +701,76 @@
     min-width:72px; text-align:center;
   }
 
+  /* ============ CARD VIEWER LIGHTBOX ============
+     Full-screen zoom view shown when tapping a filled card pocket.
+     Shows the card image large with name / set / price info below.
+     ============================================== */
+  #cardViewer{
+    position:fixed; inset:0; z-index:200;
+    background:rgba(0,0,0,0);
+    display:none; align-items:center; justify-content:center;
+    flex-direction:column; padding:16px;
+    transition:background .22s;
+    cursor:pointer;
+  }
+  #cardViewer.cv-open{ display:flex; background:rgba(0,0,0,0.90); }
+  #cvContent{
+    display:flex; flex-direction:column; align-items:center;
+    cursor:default; max-height:90vh; max-width:100%;
+    animation:cvPop .22s ease-out;
+  }
+  @keyframes cvPop{
+    from{ transform:scale(.88); opacity:0; }
+    to  { transform:scale(1);   opacity:1; }
+  }
+  #cvImg{
+    max-width:min(280px,78vw); max-height:56vh;
+    object-fit:contain; border-radius:10px; display:block;
+    box-shadow:0 8px 50px rgba(0,0,0,0.9), 0 2px 12px rgba(0,0,0,0.5);
+  }
+  #cvInfo{
+    margin-top:14px; text-align:center; max-width:min(320px,88vw);
+  }
+  #cvCardName{
+    font-size:17px; font-weight:700;
+    color:#f0e6d8; margin-bottom:4px; line-height:1.2;
+  }
+  #cvCardSet{
+    font-size:12px; color:rgba(255,255,255,0.42);
+    margin-bottom:6px; letter-spacing:.3px;
+  }
+  #cvCardPrice{
+    font-size:16px; font-weight:700; color:#7ecb8f; margin-bottom:4px;
+  }
+  #cvCardOwned{
+    display:inline-block; font-size:11px;
+    border-radius:12px; padding:2px 9px;
+    font-weight:600; letter-spacing:.4px;
+  }
+  #cvCardOwned.owned  { background:rgba(80,180,100,0.2); color:#7ecb8f; }
+  #cvCardOwned.missing{ background:rgba(220,80,80,0.2);  color:#e08888; }
+  #cvActions{ margin-top:14px; display:flex; gap:10px; }
+  .cvBtn{
+    background:rgba(255,255,255,0.1);
+    border:1px solid rgba(255,255,255,0.18);
+    color:rgba(255,255,255,0.72); border-radius:8px;
+    padding:7px 16px; cursor:pointer; font-size:13px;
+    transition:background .12s, color .12s;
+  }
+  .cvBtn:hover{ background:rgba(255,255,255,0.2); color:#fff; }
+  .cvBtn.cvPrimary{
+    background:rgba(100,160,230,0.22); border-color:rgba(100,160,230,0.4);
+    color:#9bc4f5;
+  }
+  .cvBtn.cvPrimary:hover{ background:rgba(100,160,230,0.4); color:#fff; }
+  #cvCloseBtn{
+    position:fixed; top:14px; right:16px;
+    background:none; border:none; color:rgba(255,255,255,0.38);
+    font-size:28px; cursor:pointer; line-height:1; padding:0 4px;
+    transition:color .12s; z-index:201;
+  }
+  #cvCloseBtn:hover{ color:rgba(255,255,255,0.85); }
+
   /* ---------- SCAN FEATURE ---------- */
   .pageHeader{
     display:flex; align-items:center; justify-content:center; gap:8px;
@@ -905,6 +975,25 @@
   <div class="panel" id="panelContent"></div>
 </div>
 
+<!-- ============ CARD VIEWER LIGHTBOX ============ -->
+<!-- Tap the backdrop or × to close; tap "Edit card" to open the full edit form -->
+<div id="cardViewer">
+  <button id="cvCloseBtn" title="Close">&#215;</button>
+  <div id="cvContent">
+    <img id="cvImg" src="" alt="">
+    <div id="cvInfo">
+      <div id="cvCardName"></div>
+      <div id="cvCardSet"></div>
+      <div id="cvCardPrice"></div>
+      <div id="cvCardOwned"></div>
+    </div>
+    <div id="cvActions">
+      <button class="cvBtn cvPrimary" id="cvEditBtn">&#9998; Edit card</button>
+      <button class="cvBtn" id="cvClose2Btn">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="loadingIndicator" class="hide">
   <div class="spinner"></div>
   <div id="loadingText">Loading your binder…</div>
@@ -1054,6 +1143,7 @@ async function loadBinder(){
   initFogControls(); // wire up fog toggle + reset buttons
   initGallery(); // wire up gallery toggle + filter/sort/search controls
   initLandscapeMode(); // landscape two-page spread mode
+  initCardViewer(); // card zoom lightbox
 }
 
 function normalizeLoaded(data){
@@ -1366,8 +1456,7 @@ function renderGallery(){
         </div>
       </div>`;
 
-    // Clicking a tile reuses the existing detail panel — same as tapping in binder
-    tile.addEventListener('click', () => openDetailPanel(pageIndex, slotIndex));
+    tile.addEventListener('click', () => openCardViewer(pageIndex, slotIndex));
     grid.appendChild(tile);
   });
 
@@ -2118,13 +2207,87 @@ document.getElementById('binderWrap').addEventListener('touchend', (e) => {
   touchStartX = null;
 });
 
+/* =====================================================================
+   CARD VIEWER LIGHTBOX
+   Shown when a filled pocket is tapped. Displays the card image large
+   with name / set / price below. An "Edit card" button opens the full
+   edit form. Tap the backdrop or × to dismiss.
+   ===================================================================== */
+
+let cvSlotRef = null; // { pageIndex, slotIndex } of the currently viewed card
+
+function openCardViewer(pageIndex, slotIndex){
+  const slot = (binderState.pages[pageIndex] || [])[slotIndex];
+  if (!slot) return;
+  cvSlotRef = { pageIndex, slotIndex };
+
+  document.getElementById('cvImg').src = slot.image || '';
+  document.getElementById('cvImg').alt = slot.name  || '';
+  document.getElementById('cvCardName').textContent = slot.name || '';
+  document.getElementById('cvCardSet').textContent  = slot.set  || '';
+
+  const prEl = document.getElementById('cvCardPrice');
+  prEl.textContent = (slot.price != null) ? `$${Number(slot.price).toFixed(2)}` : '—';
+
+  const owEl = document.getElementById('cvCardOwned');
+  if (slot.owned !== false){
+    owEl.textContent = 'Owned'; owEl.className = 'owned';
+  } else {
+    owEl.textContent = 'Missing'; owEl.className = 'missing';
+  }
+
+  const v = document.getElementById('cardViewer');
+  v.style.display = 'flex';
+  requestAnimationFrame(() => v.classList.add('cv-open'));
+
+  // If price is unknown, kick off a background fetch and update when done
+  if (slot.price == null){
+    fetchAndCachePrice(pageIndex, slotIndex).then(() => {
+      const ref = cvSlotRef;
+      if (!ref || ref.pageIndex !== pageIndex || ref.slotIndex !== slotIndex) return;
+      const updated = (binderState.pages[pageIndex] || [])[slotIndex];
+      if (updated?.price != null)
+        document.getElementById('cvCardPrice').textContent = `$${Number(updated.price).toFixed(2)}`;
+    });
+  }
+}
+
+function closeCardViewer(){
+  const v = document.getElementById('cardViewer');
+  v.classList.remove('cv-open');
+  setTimeout(() => { v.style.display = 'none'; }, 240);
+  cvSlotRef = null;
+}
+
+function initCardViewer(){
+  // Tap the dark backdrop (not the content card) → close
+  document.getElementById('cardViewer').addEventListener('click', e => {
+    if (e.target === document.getElementById('cardViewer')) closeCardViewer();
+  });
+  document.getElementById('cvCloseBtn').addEventListener('click',  closeCardViewer);
+  document.getElementById('cvClose2Btn').addEventListener('click', closeCardViewer);
+
+  // Edit button: close viewer then open the full edit panel
+  document.getElementById('cvEditBtn').addEventListener('click', () => {
+    const ref = cvSlotRef;
+    closeCardViewer();
+    if (ref) setTimeout(() => openDetailPanel(ref.pageIndex, ref.slotIndex), 260);
+  });
+
+  // ESC key dismisses the viewer
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('cardViewer').classList.contains('cv-open'))
+      closeCardViewer();
+  });
+}
+
 /* ---------------------------------------------------------------------
-   POCKET CLICK -> open search (empty) or detail (filled)
+   POCKET CLICK -> open search (empty) or card viewer (filled)
 --------------------------------------------------------------------- */
 function onPocketClick(pageIndex, slotIndex){
   const slot = binderState.pages[pageIndex][slotIndex];
   if (slot){
-    openDetailPanel(pageIndex, slotIndex);
+    openCardViewer(pageIndex, slotIndex);
   } else {
     openSlotOptions(pageIndex, slotIndex); // empty slot → show add-card options
   }
