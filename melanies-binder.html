@@ -4215,7 +4215,13 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
     const headers = {};
     if (binderState.apiKey) headers['X-Api-Key'] = binderState.apiKey;
 
-    const numOnly  = number ? number.toString().split('/')[0].trim() : '';
+    // Strip leading zeros from purely numeric numbers — card prints "093/084" but
+    // the API stores "93". Alphanumeric promos like "SWSH001" are left unchanged.
+    const numOnly = (() => {
+      if (!number) return '';
+      const raw = number.toString().split('/')[0].trim();
+      return /^\d+$/.test(raw) ? String(parseInt(raw, 10)) : raw;
+    })();
     const setShort = set ? set.toLowerCase().split(' ').slice(0, 3).join(' ') : '';
     const tf = async (q, n) => {
       const r = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=${n}`, { headers });
