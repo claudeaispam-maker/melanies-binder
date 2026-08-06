@@ -4034,7 +4034,7 @@ async function processSingleCardFile(file, pageIndex, slotIndex){
     const [enCands, jaCands] = await Promise.all([
       searchTCGForCard(searchName, guess.set, guess.number,
         { artist: guess.artist, hp: guess.hp, lang: guess.lang },
-        { returnAll: true, limit: isNonEn ? 4 : 6 }),
+        { returnAll: true, limit: isNonEn ? 6 : 9 }),
       isNonEn ? searchTCGDex(guess.name, guess.lang) : Promise.resolve([])
     ]);
     const seenIds = new Set((enCands || []).map(c => c.id));
@@ -4232,8 +4232,10 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
     // Multi-word: use quoted phrase (no trailing wildcard). Single-word: trailing wildcard.
     const nameExact = `name:"${name}"`;
     const nameWild  = name.includes(' ') ? `name:"${name}"` : `name:${name}*`;
-    const lastName  = name.split(' ').pop();
-    const lastWild  = `name:${lastName}*`;
+    // Use FIRST word for the wildcard, not the last. For "Pikachu VMAX", lastName="VMAX"
+    // which matches every VMAX card — useless. firstName="Pikachu" catches all Pikachu variants.
+    const firstName = name.split(' ')[0];
+    const lastWild  = `name:${firstName}*`;
 
     // --- McDonald's early pass ---
     if (set && /mcdonald/i.test(set)){
@@ -4310,9 +4312,9 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
       add(hits);
     }
 
-    // --- Pass 5: name only ---
+    // --- Pass 5: name only (broad — also catches variants like "Pikachu V", "Pikachu VMAX") ---
     if (!done()){
-      const d = await tf(`${nameWild}`, 16);
+      const d = await tf(`${nameWild}`, 36);
       if (!returnAll && d.length){
         if (setShort){
           const hit = d.find(c => c.set?.name?.toLowerCase().includes(setShort));
@@ -4320,6 +4322,14 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
         }
         if (!meta.artist && !meta.hp) return d[0];
       }
+      add(d);
+    }
+
+    // --- Pass 5b: first-word wildcard + number (catches variant misreads — e.g. Claude reads
+    //     "Pikachu" but the card is "Pikachu V"; name:Pikachu* number:X finds it) ---
+    if (!done() && numOnly && !name.includes(' ')){
+      const d = await tf(`${lastWild} number:${numOnly}`, 12);
+      if (!returnAll && d.length) return d[0];
       add(d);
     }
 
