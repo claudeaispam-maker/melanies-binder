@@ -2522,6 +2522,17 @@ function openImageCropper(imageDataUrl, onConfirm, onCancel){
   function draw(){
     ctx.clearRect(0, 0, CW, CH);
     ctx.drawImage(img, ox, oy, img.width * scale, img.height * scale);
+    // corner bracket guides — align card edges to these
+    const L = 24;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.82)';
+    ctx.lineWidth   = 2.5;
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur  = 4;
+    [[0,0,L,0,0,L],[CW,0,-L,0,0,L],[0,CH,L,0,0,-L],[CW,CH,-L,0,0,-L]].forEach(([x,y,dx1,dy1,dx2,dy2]) => {
+      ctx.beginPath(); ctx.moveTo(x+dx1,y+dy1); ctx.lineTo(x,y); ctx.lineTo(x+dx2,y+dy2); ctx.stroke();
+    });
+    ctx.restore();
   }
 
   function applyScale(newScale, pivotX, pivotY){
@@ -2613,6 +2624,7 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
   const preSet   = prefill.set   || '';
   const prePrice = prefill.price != null ? String(prefill.price) : '';
   const preImage = prefill.image || null;
+  const preIsUrl = preImage && preImage.startsWith('http');
 
   showOverlay(`
     <h2 style="margin-bottom:8px;">✏️ Custom Card — Slot ${slotIndex + 1}</h2>
@@ -2631,8 +2643,12 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
     </div>
     <label style="font-size:12px;color:#555;">Card Image (optional)</label>
     <button class="secondary" id="customImgBtn" style="width:100%;margin-bottom:4px;">
-      ${preImage ? '📁 Change Image' : '📁 Choose & Crop Image'}
+      ${preImage && !preIsUrl ? '📁 Change Image' : '📁 Snap / Upload & Crop'}
     </button>
+    <div style="text-align:center;font-size:11px;color:#aaa;margin:2px 0 5px;">— or paste an image URL —</div>
+    <input type="url" id="customImgUrl" placeholder="https://... (e.g. GitHub Pages link)" autocorrect="off"
+           value="${preIsUrl ? escapeHtml(preImage) : ''}"
+           style="margin-bottom:6px;font-size:12px;">
     <div id="customImgPreview" style="text-align:center;margin-bottom:8px;">
       ${preImage ? `<img src="${preImage}" style="max-height:120px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.2);">` : ''}
     </div>
@@ -2642,7 +2658,7 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
     </div>
   `);
 
-  let customImageDataUrl = preImage;
+  let customImageDataUrl = (!preIsUrl) ? preImage : null;
 
   document.getElementById('customCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
 
@@ -2667,17 +2683,29 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
     inp.click();
   });
 
+  document.getElementById('customImgUrl').addEventListener('input', (e) => {
+    const url = e.target.value.trim();
+    if (url.startsWith('http')) {
+      customImageDataUrl = null; // URL takes priority over cropped file
+      document.getElementById('customImgPreview').innerHTML =
+        `<img src="${escapeHtml(url)}" style="max-height:120px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.2);"
+              onerror="this.parentNode.innerHTML='<span style=&quot;color:#c55;font-size:12px;&quot;>⚠ Could not load image</span>'">`;
+    }
+  });
+
   document.getElementById('customSaveBtn').addEventListener('click', () => {
     const name     = document.getElementById('customName').value.trim();
     if (!name){ toast('Enter a card name.'); return; }
     const set      = document.getElementById('customSet').value.trim();
     const priceRaw = document.getElementById('customPrice').value.trim();
     const price    = priceRaw !== '' ? parseFloat(priceRaw) : null;
+    const urlField = document.getElementById('customImgUrl').value.trim();
+    const finalImage = customImageDataUrl || (urlField.startsWith('http') ? urlField : '');
 
     binderState.pages[pageIndex][slotIndex] = {
       cardId: '',
       name,
-      image: customImageDataUrl || '',
+      image: finalImage,
       set,
       owned: true,
       quantity: 1,
