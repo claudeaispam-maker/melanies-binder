@@ -2438,6 +2438,9 @@ function openSlotOptions(pageIndex, slotIndex){
     <button class="secondary" id="promoSlotBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
       ⭐ Browse Promo &amp; McDonald's Sets
     </button>
+    <button class="secondary" id="ghGalleryBtn" style="width:100%;padding:11px;font-size:14px;margin-bottom:8px;">
+      🖼 Browse Card Photos (GitHub)
+    </button>
     <button class="secondary" id="customSlotBtn" style="width:100%;padding:11px;font-size:14px;">
       ✏️ Add Custom Card (no API needed)
     </button>
@@ -2449,6 +2452,7 @@ function openSlotOptions(pageIndex, slotIndex){
   document.getElementById('searchSlotBtn').addEventListener('click', () => openSearchPanel(pageIndex, slotIndex));
   document.getElementById('promoSlotBtn').addEventListener('click', () => openPromoSearch(pageIndex, slotIndex));
   document.getElementById('customSlotBtn').addEventListener('click', () => openCustomCardPanel(pageIndex, slotIndex));
+  document.getElementById('ghGalleryBtn').addEventListener('click', () => openGitHubGallery(pageIndex, slotIndex));
 
   document.getElementById('snapPhotoBtn').addEventListener('click', () => {
     const inp = document.createElement('input');
@@ -2720,6 +2724,54 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
     hideOverlay();
     toast(`${name} added to slot ${slotIndex + 1}.`);
   });
+}
+
+/* openGitHubGallery — fetches card-images/mlp/ from GitHub and lets user pick one for a slot. */
+async function openGitHubGallery(pageIndex, slotIndex){
+  const GH_API = 'https://api.github.com/repos/claudeaispam-maker/melanies-binder/contents/card-images/mlp';
+  const GH_RAW = 'https://raw.githubusercontent.com/claudeaispam-maker/melanies-binder/master/card-images/mlp';
+
+  showOverlay(`
+    <h2 style="margin-bottom:8px;">🖼 Card Photos</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 10px;">Tap a card to add it to slot ${slotIndex+1}.</p>
+    <div id="ghGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+    <div id="ghLoader" style="text-align:center;color:#888;padding:20px;font-size:13px;">Loading…</div>
+    <div id="ghEmpty" style="display:none;text-align:center;color:#888;padding:20px;font-size:13px;">
+      No photos yet. Use the <b>Card Photo Manager</b> app to upload card images.<br><br>
+      <a href="card-manager.html" style="color:#9b59b6;">Open Card Photo Manager →</a>
+    </div>
+    <div class="closeRow" style="margin-top:12px;">
+      <button class="secondary" id="ghGalleryBack">← Back</button>
+      <a href="card-manager.html" style="font-size:12px;color:#9b59b6;align-self:center;margin-left:8px;">📷 Upload New</a>
+    </div>
+  `);
+  document.getElementById('ghGalleryBack').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+
+  try {
+    const r = await fetch(GH_API, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) throw new Error(`GitHub API error ${r.status}`);
+    const files = (await r.json()).filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f.name));
+    document.getElementById('ghLoader').style.display = 'none';
+
+    if (!files.length){ document.getElementById('ghEmpty').style.display = 'block'; return; }
+
+    const grid = document.getElementById('ghGrid');
+    files.forEach(file => {
+      const rawUrl = `${GH_RAW}/${file.name}`;
+      const item = document.createElement('div');
+      item.style.cssText = 'background:#f5f0ff;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid transparent;transition:border-color .15s;';
+      item.innerHTML = `<img src="${rawUrl}" alt="${escapeHtml(file.name)}" loading="lazy"
+                             style="width:100%;aspect-ratio:5/7;object-fit:cover;display:block;">
+                        <div style="font-size:10px;color:#888;padding:3px 5px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;">${escapeHtml(file.name)}</div>`;
+      item.addEventListener('click', () => {
+        const cardName = file.name.replace(/\.[^.]+$/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        openCustomCardPanel(pageIndex, slotIndex, { image: rawUrl, name: cardName });
+      });
+      grid.appendChild(item);
+    });
+  } catch(e){
+    document.getElementById('ghLoader').textContent = 'Failed to load: ' + e.message;
+  }
 }
 
 // --- TCGDex: multilingual Pokémon card API (Japanese, Chinese, etc.) ---
