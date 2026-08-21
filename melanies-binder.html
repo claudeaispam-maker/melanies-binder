@@ -2726,52 +2726,91 @@ function openCustomCardPanel(pageIndex, slotIndex, prefill = {}){
   });
 }
 
-/* openGitHubGallery — fetches card-images/mlp/ from GitHub and lets user pick one for a slot. */
+/* parseGitHubFolderUrl — parses github.com/owner/repo/tree/branch/path into API + raw base URLs */
+function parseGitHubFolderUrl(input){
+  input = input.trim().replace(/\/$/, '');
+  // Full tree URL: github.com/owner/repo/tree/branch/path
+  let m = input.match(/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/?(.*)$/);
+  if (m) return {
+    api: `https://api.github.com/repos/${m[1]}/${m[2]}/contents/${m[4]}`,
+    raw: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}${m[4] ? '/' + m[4] : ''}`
+  };
+  // Root repo: github.com/owner/repo
+  m = input.match(/github\.com\/([^/]+)\/([^/]+)$/);
+  if (m) return {
+    api: `https://api.github.com/repos/${m[1]}/${m[2]}/contents/`,
+    raw: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main`
+  };
+  return null;
+}
+
+/* openGitHubGallery — browse card-images/mlp/ OR any public GitHub folder */
 async function openGitHubGallery(pageIndex, slotIndex){
-  const GH_API = 'https://api.github.com/repos/claudeaispam-maker/melanies-binder/contents/card-images/mlp';
-  const GH_RAW = 'https://raw.githubusercontent.com/claudeaispam-maker/melanies-binder/master/card-images/mlp';
+  const DEFAULT_API = 'https://api.github.com/repos/claudeaispam-maker/melanies-binder/contents/card-images/mlp';
+  const DEFAULT_RAW = 'https://raw.githubusercontent.com/claudeaispam-maker/melanies-binder/master/card-images/mlp';
+
+  const renderGrid = async (apiUrl, rawBase) => {
+    document.getElementById('ghGrid').innerHTML = '';
+    document.getElementById('ghLoader').style.display = 'block';
+    document.getElementById('ghLoader').textContent = 'Loading…';
+    document.getElementById('ghEmpty').style.display = 'none';
+    try {
+      const r = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github+json' } });
+      if (!r.ok) throw new Error(`GitHub ${r.status}${r.status===403?' — rate limited or private repo':r.status===404?' — folder not found':''}`);
+      const all = await r.json();
+      const files = all.filter(f => f.type === 'file' && /\.(jpg|jpeg|png|webp|gif)$/i.test(f.name));
+      document.getElementById('ghLoader').style.display = 'none';
+      if (!files.length){ document.getElementById('ghEmpty').style.display = 'block'; return; }
+      const grid = document.getElementById('ghGrid');
+      files.forEach(file => {
+        const rawUrl = file.download_url || `${rawBase}/${file.name}`;
+        const item = document.createElement('div');
+        item.style.cssText = 'background:#f5f0ff;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid transparent;transition:border-color .15s;';
+        item.innerHTML = `<img src="${rawUrl}" alt="${escapeHtml(file.name)}" loading="lazy"
+                               style="width:100%;aspect-ratio:5/7;object-fit:cover;display:block;">
+                          <div style="font-size:10px;color:#888;padding:3px 5px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;">${escapeHtml(file.name)}</div>`;
+        item.addEventListener('click', () => {
+          const cardName = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          openCustomCardPanel(pageIndex, slotIndex, { image: rawUrl, name: cardName });
+        });
+        grid.appendChild(item);
+      });
+    } catch(e){
+      document.getElementById('ghLoader').textContent = '⚠ ' + e.message;
+    }
+  };
 
   showOverlay(`
-    <h2 style="margin-bottom:8px;">🖼 Card Photos</h2>
-    <p style="font-size:12px;color:#888;margin:0 0 10px;">Tap a card to add it to slot ${slotIndex+1}.</p>
+    <h2 style="margin-bottom:6px;">🖼 Browse Card Photos</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 8px;">Tap a card to add it to slot ${slotIndex+1}.</p>
+    <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <input type="url" id="ghUrlInput" placeholder="Paste any public GitHub folder URL…"
+             style="flex:1;font-size:12px;padding:8px 10px;" autocorrect="off">
+      <button id="ghBrowseBtn" style="padding:8px 12px;background:#9b59b6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer;">Browse</button>
+    </div>
     <div id="ghGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
     <div id="ghLoader" style="text-align:center;color:#888;padding:20px;font-size:13px;">Loading…</div>
     <div id="ghEmpty" style="display:none;text-align:center;color:#888;padding:20px;font-size:13px;">
-      No photos yet. Use the <b>Card Photo Manager</b> app to upload card images.<br><br>
-      <a href="card-manager.html" style="color:#9b59b6;">Open Card Photo Manager →</a>
+      No images found in this folder.<br>
+      <span style="font-size:11px;">Only JPG, PNG, WebP, GIF files are shown.</span>
     </div>
     <div class="closeRow" style="margin-top:12px;">
       <button class="secondary" id="ghGalleryBack">← Back</button>
       <a href="card-manager.html" style="font-size:12px;color:#9b59b6;align-self:center;margin-left:8px;">📷 Upload New</a>
     </div>
   `);
+
   document.getElementById('ghGalleryBack').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
+  document.getElementById('ghBrowseBtn').addEventListener('click', () => {
+    const val = document.getElementById('ghUrlInput').value.trim();
+    if (!val){ renderGrid(DEFAULT_API, DEFAULT_RAW); return; }
+    const parsed = parseGitHubFolderUrl(val);
+    if (!parsed){ document.getElementById('ghLoader').style.display='block'; document.getElementById('ghLoader').textContent='⚠ Paste a github.com/…/tree/… URL'; return; }
+    renderGrid(parsed.api, parsed.raw);
+  });
 
-  try {
-    const r = await fetch(GH_API, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!r.ok) throw new Error(`GitHub API error ${r.status}`);
-    const files = (await r.json()).filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f.name));
-    document.getElementById('ghLoader').style.display = 'none';
-
-    if (!files.length){ document.getElementById('ghEmpty').style.display = 'block'; return; }
-
-    const grid = document.getElementById('ghGrid');
-    files.forEach(file => {
-      const rawUrl = `${GH_RAW}/${file.name}`;
-      const item = document.createElement('div');
-      item.style.cssText = 'background:#f5f0ff;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid transparent;transition:border-color .15s;';
-      item.innerHTML = `<img src="${rawUrl}" alt="${escapeHtml(file.name)}" loading="lazy"
-                             style="width:100%;aspect-ratio:5/7;object-fit:cover;display:block;">
-                        <div style="font-size:10px;color:#888;padding:3px 5px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;">${escapeHtml(file.name)}</div>`;
-      item.addEventListener('click', () => {
-        const cardName = file.name.replace(/\.[^.]+$/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        openCustomCardPanel(pageIndex, slotIndex, { image: rawUrl, name: cardName });
-      });
-      grid.appendChild(item);
-    });
-  } catch(e){
-    document.getElementById('ghLoader').textContent = 'Failed to load: ' + e.message;
-  }
+  // Load own folder by default
+  renderGrid(DEFAULT_API, DEFAULT_RAW);
 }
 
 // --- TCGDex: multilingual Pokémon card API (Japanese, Chinese, etc.) ---

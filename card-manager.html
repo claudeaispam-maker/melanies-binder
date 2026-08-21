@@ -157,12 +157,19 @@ a { color:var(--purple); }
 
   <!-- GALLERY PANEL -->
   <div class="panel" id="panelGallery">
-    <div class="card" style="padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-size:13px;font-weight:600;">Card Photos on GitHub</span>
-      <button class="btn-secondary" id="refreshGallery" style="padding:6px 12px;font-size:12px;">↺ Refresh</button>
+    <div class="card" style="padding:10px 12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:13px;font-weight:600;">Card Photos on GitHub</span>
+        <button class="btn-secondary" id="refreshGallery" style="padding:6px 12px;font-size:12px;">↺ My Folder</button>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <input type="url" id="extUrlInput" placeholder="Paste any public GitHub folder URL…"
+               style="flex:1;font-size:12px;padding:8px 10px;margin:0;" autocorrect="off">
+        <button id="extBrowseBtn" class="btn-primary" style="width:auto;padding:8px 12px;font-size:13px;white-space:nowrap;">Browse</button>
+      </div>
     </div>
     <div id="galleryLoader">Loading…</div>
-    <div id="galleryEmpty" style="display:none;">No card images uploaded yet.<br>Go to Upload tab to add your first card.</div>
+    <div id="galleryEmpty" style="display:none;">No images found.<br>Go to Upload tab to add your first card.</div>
     <div id="galleryGrid"></div>
   </div>
 
@@ -497,18 +504,36 @@ document.getElementById('uploadAnother').addEventListener('click', () => {
 // ---- gallery ----
 let galleryFiles = [];
 
-async function loadGallery(){
+function parseGitHubFolderUrl(input){
+  input = input.trim().replace(/\/$/, '');
+  let m = input.match(/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/?(.*)$/);
+  if (m) return {
+    api: `https://api.github.com/repos/${m[1]}/${m[2]}/contents/${m[4]}`,
+    raw: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}${m[4] ? '/' + m[4] : ''}`
+  };
+  m = input.match(/github\.com\/([^/]+)\/([^/]+)$/);
+  if (m) return {
+    api: `https://api.github.com/repos/${m[1]}/${m[2]}/contents/`,
+    raw: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main`
+  };
+  return null;
+}
+
+async function loadGallery(apiUrl, rawBase){
+  apiUrl  = apiUrl  || API;
+  rawBase = rawBase || RAW;
   document.getElementById('galleryLoader').style.display = 'block';
+  document.getElementById('galleryLoader').textContent = 'Loading…';
   document.getElementById('galleryEmpty').style.display = 'none';
   document.getElementById('galleryGrid').innerHTML = '';
 
   try {
-    const r = await fetch(API, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const files = await r.json();
-    galleryFiles = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f.name));
+    const r = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) throw new Error(`GitHub ${r.status}${r.status===403?' — rate limited or private':r.status===404?' — not found':''}`);
+    const all = await r.json();
+    galleryFiles = all.filter(f => f.type === 'file' && /\.(jpg|jpeg|png|webp|gif)$/i.test(f.name));
   } catch(e){
-    document.getElementById('galleryLoader').textContent = 'Failed to load: ' + e.message;
+    document.getElementById('galleryLoader').textContent = '⚠ ' + e.message;
     return;
   }
 
@@ -521,7 +546,7 @@ async function loadGallery(){
 
   const grid = document.getElementById('galleryGrid');
   galleryFiles.forEach(file => {
-    const rawUrl = `${RAW}/${file.name}`;
+    const rawUrl = file.download_url || `${rawBase}/${file.name}`;
     const div = document.createElement('div');
     div.className = 'gallery-item';
     div.innerHTML = `<img src="${rawUrl}" alt="${file.name}" loading="lazy">
@@ -531,7 +556,22 @@ async function loadGallery(){
   });
 }
 
-document.getElementById('refreshGallery').addEventListener('click', loadGallery);
+document.getElementById('refreshGallery').addEventListener('click', () => {
+  document.getElementById('extUrlInput').value = '';
+  loadGallery();
+});
+
+document.getElementById('extBrowseBtn').addEventListener('click', () => {
+  const val = document.getElementById('extUrlInput').value.trim();
+  if (!val){ loadGallery(); return; }
+  const parsed = parseGitHubFolderUrl(val);
+  if (!parsed){
+    document.getElementById('galleryLoader').style.display = 'block';
+    document.getElementById('galleryLoader').textContent = '⚠ Paste a github.com/…/tree/… folder URL';
+    return;
+  }
+  loadGallery(parsed.api, parsed.raw);
+});
 
 function openImageModal(file, rawUrl){
   document.getElementById('modalImg').src = rawUrl;
