@@ -4338,8 +4338,26 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
       if (returnAll) return candidates;
     }
 
-    // --- Promo number pass: SWSH001, SM01, XY01, BW01, HS01, DP01, SVP001… ---
-    if (!done() && numOnly && /^(SWSH|SM|XY|BW|HS|DP|SVP|SV|POGO|PR)/i.test(numOnly)){
+    // --- Pass 0b: set ID shorthand — "ME5"→set.id:me5, "SV10"→set.id:sv10, "SWSH12"→set.id:swsh12 ---
+    const setIdGuess = (() => {
+      if (!set) return null;
+      const s = set.trim();
+      const meM = s.match(/^ME\s*(\d+)([\s.]?pt[\s.]?5)?/i);
+      if (meM) return `me${meM[1]}${meM[2] ? 'pt5' : ''}`;
+      const svM = s.match(/^SV\s*(\d+)([\s.]?pt[\s.]?5)?/i);
+      if (svM) return `sv${svM[1]}${svM[2] ? 'pt5' : ''}`;
+      const swM = s.match(/^SWSH\s*(\d+)(pt5|tg|gg)?/i);
+      if (swM) return `swsh${swM[1]}${swM[2] ? swM[2].toLowerCase() : ''}`;
+      return null;
+    })();
+    if (!done() && numOnly && setIdGuess){
+      const d = await tf(`${nameExact} number:${numOnly} set.id:${setIdGuess}`, 4);
+      if (!returnAll && d.length) return d[0];
+      add(d);
+    }
+
+    // --- Promo number pass: SWSH001, SM01, XY01, BW01, HS01, DP01, SVP001, TG01, GG01, ACE… ---
+    if (!done() && numOnly && /^(SWSH|SM|XY|BW|HS|DP|SVP|SV|POGO|PR|TG|GG|ACE|RC)/i.test(numOnly)){
       const d = await tf(`${nameExact} number:${numOnly}`, 6);
       if (!returnAll && d.length) return d[0];
       add(d);
@@ -4353,6 +4371,14 @@ async function searchTCGForCard(name, set, number, meta = {}, { returnAll = fals
     // --- Pass 1: name + number + set ---
     if (!done() && numOnly && set){
       const d = await tf(`${nameExact} number:${numOnly} ${setNameQ(set)}`, 4);
+      if (!returnAll && d.length) return d[0];
+      add(d);
+    }
+
+    // --- Pass 1b: fuzzy set name + number (handles partial/misread set names like "Scarlet Violet" → Scarlet*) ---
+    if (!done() && numOnly && set && set.includes(' ')){
+      const firstSetWord = set.trim().split(/\s+/)[0];
+      const d = await tf(`${nameExact} number:${numOnly} set.name:${firstSetWord}*`, 6);
       if (!returnAll && d.length) return d[0];
       add(d);
     }
