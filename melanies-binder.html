@@ -2192,10 +2192,13 @@ async function fetchAndCachePrice(pageIndex, slotIndex){
 
     const {data} = await res.json();
 
-    // Store the resolved market price and full variant breakdown on the slot
     const price = getMarketPrice(data.tcgplayer);
-    slot.price          = price;
-    slot.priceDetails   = data.tcgplayer?.prices || null;
+    // Only overwrite stored price if the API returned a value — preserve any
+    // previously cached price so a temporary no-data response doesn't wipe it.
+    if (price != null){
+      slot.price        = price;
+      slot.priceDetails = data.tcgplayer?.prices || null;
+    }
     slot.priceUpdatedAt = Date.now();
 
     persist();
