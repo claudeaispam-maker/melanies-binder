@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Melanie's Binder</title>
 
 <!-- iOS "Add to Home Screen" tags -->
@@ -66,6 +66,7 @@
     font-family: 'Segoe UI', system-ui, sans-serif;
     background: radial-gradient(ellipse at center, #2b2b2b 0%, #111 100%);
     overflow:hidden;
+    touch-action:manipulation;
     color:#222;
     -webkit-tap-highlight-color: transparent;
     user-select:none;
@@ -3610,7 +3611,17 @@ function openDetailPanel(pageIndex, slotIndex){
   showOverlay(`
     <h2>${escapeHtml(slot.name)}</h2>
     <div class="detailRow">
-      <img src="${slot.image}" alt="${escapeHtml(slot.name)}">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex-shrink:0;">
+        <div id="imgChangeWrap" style="position:relative;cursor:pointer;" title="Tap to find a new image">
+          <img src="${slot.image}" alt="${escapeHtml(slot.name)}"
+               style="display:block;border-radius:6px;max-width:90px;">
+          <div style="position:absolute;inset:0;border-radius:6px;background:rgba(0,0,0,0.45);
+                      display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;">
+            <span style="color:#fff;font-size:10px;font-weight:700;letter-spacing:.3px;
+                         background:rgba(0,0,0,.5);border-radius:4px;padding:2px 6px;">🔍 Change</span>
+          </div>
+        </div>
+      </div>
       <div class="detailFields" style="flex:1">
         <div style="color:#888; font-size:12px;">${escapeHtml(slot.set || '')}</div>
         <label>Status</label>
@@ -3640,6 +3651,7 @@ function openDetailPanel(pageIndex, slotIndex){
   document.getElementById('missingBtn').addEventListener('click', () => setOwnedToggle(false));
   document.getElementById('saveDetailBtn').addEventListener('click', saveDetail);
   document.getElementById('moveCardBtn').addEventListener('click', () => openMovePanel(pageIndex, slotIndex));
+  document.getElementById('imgChangeWrap').addEventListener('click', () => openResearchPanel(pageIndex, slotIndex));
   document.getElementById('removeDetailBtn').addEventListener('click', removeSlot);
   document.getElementById('closeDetailBtn').addEventListener('click', hideOverlay);
   document.getElementById('refreshPriceBtn').addEventListener('click', async () => {
@@ -3655,6 +3667,105 @@ function openDetailPanel(pageIndex, slotIndex){
       document.getElementById('priceSectionWrapper').outerHTML = buildPriceSectionHTML(u2);
     });
   });
+}
+
+/* openResearchPanel — search for a replacement image for an existing slot.
+   Pre-fills name+set from the slot, auto-triggers the search immediately.
+   On card select → openUpdateConfirmPanel (preserves owned/qty/condition/notes). */
+function openResearchPanel(pageIndex, slotIndex){
+  const slot = binderState.pages[pageIndex][slotIndex];
+  if (!slot) return;
+  const prefillName = slot.name || '';
+  const prefillSet  = slot.set  || '';
+  searchLang = 'en';
+
+  showOverlay(`
+    <h2 style="margin-bottom:6px;">🔍 Re-search Image</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 8px 0;">Edit name or set below, then search. Your owned/qty/condition/notes stay.</p>
+    <input type="text" id="rsName" value="${escapeHtml(prefillName)}" placeholder="Card name" autocorrect="off">
+    <input type="text" id="rsSet"  value="${escapeHtml(prefillSet)}"  placeholder="Set filter (optional)" autocorrect="off"
+           style="font-size:13px;color:#555;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:4px;">
+      <button class="primary" id="rsGoBtn" style="flex:1;">Search</button>
+      <button class="secondary" id="rsCancelBtn">← Back to Edit</button>
+    </div>
+    <div id="resultsGrid"></div>
+  `);
+
+  const doRS = async () => {
+    const q   = document.getElementById('rsName').value.trim();
+    const set = document.getElementById('rsSet').value.trim();
+    const el  = document.getElementById('resultsGrid');
+    if (!q){ el.innerHTML = '<div class="emptyMsg">Type a card name to search.</div>'; return; }
+    el.innerHTML = '<div class="loadingMsg">Searching…</div>';
+    try {
+      const cards = await searchTCGForCard(q, set, '', {}, { returnAll: true, limit: 9 });
+      if (!cards || !cards.length){
+        el.innerHTML = '<div class="emptyMsg">No results. Try a different name or set.</div>'; return;
+      }
+      el.innerHTML = '';
+      cards.forEach(card => {
+        const item = document.createElement('div');
+        item.className = 'resultCard';
+        item.innerHTML = `<img src="${card.images?.small || ''}" alt="${escapeHtml(card.name)}">
+          <div>${escapeHtml(card.name)}</div>
+          <div style="color:#999;font-size:10px;">${escapeHtml(card.set?.name || '')} #${escapeHtml(card.number || '')}</div>`;
+        item.addEventListener('click', () => openUpdateConfirmPanel(card, pageIndex, slotIndex));
+        el.appendChild(item);
+      });
+    } catch(e) {
+      document.getElementById('resultsGrid').innerHTML = '<div class="emptyMsg">Search error. Check your connection.</div>';
+    }
+  };
+
+  document.getElementById('rsGoBtn').addEventListener('click', doRS);
+  document.getElementById('rsName').addEventListener('keydown', e => { if(e.key==='Enter') doRS(); });
+  document.getElementById('rsSet').addEventListener('keydown',  e => { if(e.key==='Enter') doRS(); });
+  document.getElementById('rsCancelBtn').addEventListener('click', () => openDetailPanel(pageIndex, slotIndex));
+
+  if (prefillName) doRS();
+}
+
+/* openUpdateConfirmPanel — confirm screen before updating an existing slot's image & identity.
+   Preserves owned, quantity, condition, notes from the current slot. */
+function openUpdateConfirmPanel(card, pageIndex, slotIndex){
+  const img = card.images?.large || card.images?.small || '';
+  showOverlay(`
+    <h2 style="margin-bottom:10px;">Update with this card?</h2>
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;">
+      <img src="${img}" alt="${escapeHtml(card.name)}"
+           style="width:110px;border-radius:6px;flex-shrink:0;background:#f0f0f0;box-shadow:0 2px 6px rgba(0,0,0,.15);">
+      <div style="flex:1;overflow:hidden;padding-top:2px;">
+        <div style="font-weight:700;font-size:16px;line-height:1.25;margin-bottom:5px;">${escapeHtml(card.name)}</div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px;">${escapeHtml(card.set?.name || '')} · #${escapeHtml(card.number || '')}</div>
+        ${card.rarity ? `<div style="font-size:11px;color:#888;">${escapeHtml(card.rarity)}</div>` : ''}
+      </div>
+    </div>
+    <p style="font-size:11px;color:#888;margin:0 0 10px 0;">✓ Owned / quantity / condition / notes will be kept.</p>
+    <button class="primary"   id="updConfirmBtn" style="width:100%;margin-bottom:8px;">✓ Update Image & Info</button>
+    <button class="secondary" id="updBackBtn"    style="width:100%;">← Back to Results</button>
+  `);
+  document.getElementById('updConfirmBtn').addEventListener('click', () => {
+    const existing = binderState.pages[pageIndex][slotIndex] || {};
+    binderState.pages[pageIndex][slotIndex] = {
+      cardId:       card.id,
+      name:         card.name,
+      image:        card.images?.large || card.images?.small || '',
+      set:          card.set?.name || '',
+      owned:        existing.owned !== undefined ? existing.owned : true,
+      quantity:     existing.quantity !== undefined ? existing.quantity : 1,
+      condition:    existing.condition || 'Near Mint',
+      notes:        existing.notes || '',
+      price:        getMarketPrice(card.tcgplayer),
+      priceDetails: card.tcgplayer?.prices || null
+    };
+    persist();
+    renderPage(currentSpread, null);
+    updateSummary();
+    toast(`${card.name} image updated.`);
+    openDetailPanel(pageIndex, slotIndex); // return to edit panel with updated image + preserved fields
+  });
+  document.getElementById('updBackBtn').addEventListener('click', () => openResearchPanel(pageIndex, slotIndex));
 }
 
 function setOwnedToggle(owned){
@@ -4566,14 +4677,17 @@ async function processScanFile(file, pageIndex){
         return { ...base, name: null, image: null, set: '', confidence: 'unknown' };
       }
 
-      const card = await searchTCGForCard(guess.name, guess.set, guess.number);
+      const candidates = await searchTCGForCard(guess.name, guess.set, guess.number, {}, { returnAll: true, limit: 6 });
+      const card = candidates && candidates.length ? candidates[0] : null;
       return {
         ...base,
         cardId: card?.id || null,
         name: card?.name || guess.name,
         image: card?.images?.large || card?.images?.small || null,
         set: card?.set?.name || guess.set || '',
-        confidence: guess.confidence
+        confidence: guess.confidence,
+        candidates: candidates || [],
+        guess
       };
     }));
 
@@ -4595,7 +4709,7 @@ function openScanReviewPanel(pageIndex, resolved){
   showOverlay(`
     <h2>Review scan — Page ${pageIndex + 1}</h2>
     <p style="font-size:12px;color:#888;margin:0 0 8px;">
-      Tap <strong>Fix</strong> on any wrong card to correct it. Corrections are saved so the same card is recognised instantly next time.
+      Tap a card image to pick from matches, or <strong>Fix</strong> to search manually. Corrections help future scans.
     </p>
     <div class="scanReviewGrid" id="scanReviewGrid"></div>
     <button class="scanSaveAllBtn" id="scanSaveAllBtn">✓ Save to binder</button>
@@ -4607,18 +4721,20 @@ function openScanReviewPanel(pageIndex, resolved){
 
   const grid = document.getElementById('scanReviewGrid');
   resolved.forEach((r, i) => {
-    const hasCard  = r.name && r.name !== 'unknown' && r.image;
-    const confLabel = r.fromCache ? 'cached' : (r.confidence || 'unknown');
+    const hasCard      = r.name && r.name !== 'unknown' && r.image;
+    const hasCandidates = r.candidates && r.candidates.length > 1;
+    const confLabel    = r.fromCache ? 'cached' : (r.confidence || 'unknown');
 
     const slot = document.createElement('div');
     slot.className = 'scanSlot ' + (hasCard ? 'confirmed' : 'needs-fix');
     slot.id = `scanSlot${i}`;
     slot.innerHTML = `
-      <div class="scanSlotTop">
+      <div class="scanSlotTop" style="${hasCandidates ? 'cursor:pointer;' : ''}">
         <img src="${hasCard ? r.image : r.cellDataUrl}" alt="slot ${i+1}"
              onerror="this.src='${r.cellDataUrl}'">
         <div class="scanSlotNum">${i + 1}</div>
         <div class="confBadge ${confLabel}">${confLabel}</div>
+        ${hasCandidates ? `<div style="position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.6);color:#fff;font-size:10px;padding:2px 5px;border-radius:4px;pointer-events:none;">🔍 Pick</div>` : ''}
       </div>
       <div class="scanSlotInfo">
         <strong>${escapeHtml(r.name || '—')}</strong>
@@ -4627,6 +4743,12 @@ function openScanReviewPanel(pageIndex, resolved){
       <button class="scanFixBtn" data-i="${i}">Fix</button>
     `;
     slot.querySelector('.scanFixBtn').addEventListener('click', () => openScanFix(i));
+    if (hasCandidates){
+      slot.querySelector('.scanSlotTop').addEventListener('click', () => {
+        pendingPickSlotRef = { isScanFix: true, scanSlotIndex: i };
+        openCandidatePicker(r.candidates, scanPageIndex, i, r.guess || { name: r.name, set: r.set });
+      });
+    }
     grid.appendChild(slot);
   });
 
