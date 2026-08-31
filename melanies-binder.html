@@ -355,6 +355,15 @@
   .priceBreakdown table{ width:100%; border-collapse:collapse; }
   .priceBreakdown td{ padding:2px 4px; }
   .priceBreakdown td:last-child{ text-align:right; font-weight:600; color:#444; }
+  .roiSection{ margin-top:8px; padding:8px; background:#f0f7f1; border-radius:6px; font-size:12px; }
+  .roiSection .roiRow{ display:flex; justify-content:space-between; margin-bottom:2px; }
+  .roiSection .roiGain{ font-weight:700; font-size:14px; }
+  .roiSection .roiGain.up{ color:#2d7a3a; }
+  .roiSection .roiGain.down{ color:#c0392b; }
+  .priceHistList{ margin-top:8px; font-size:11px; color:#666; }
+  .priceHistList table{ width:100%; border-collapse:collapse; }
+  .priceHistList td{ padding:2px 4px; }
+  .priceHistList td:last-child{ text-align:right; font-weight:600; color:#333; }
   .pocket .ownedDot{
     position:absolute; top:4px; left:4px; width:10px; height:10px; border-radius:50%;
     box-shadow: 0 0 0 1.5px rgba(255,255,255,0.8);
@@ -2161,6 +2170,10 @@ function getMarketPrice(tcgplayer){
   return null;
 }
 
+function fmtDate(ts){
+  return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' });
+}
+
 function timeAgo(ts){
   if (!ts) return null;
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -2196,8 +2209,14 @@ async function fetchAndCachePrice(pageIndex, slotIndex){
     // Only overwrite stored price if the API returned a value — preserve any
     // previously cached price so a temporary no-data response doesn't wipe it.
     if (price != null){
+      const prev = slot.price;
       slot.price        = price;
       slot.priceDetails = data.tcgplayer?.prices || null;
+      if (prev !== price){
+        if (!slot.priceHistory) slot.priceHistory = [];
+        slot.priceHistory.push({ price, date: Date.now() });
+        if (slot.priceHistory.length > 30) slot.priceHistory.shift();
+      }
     }
     slot.priceUpdatedAt = Date.now();
 
@@ -3562,6 +3581,7 @@ function placeCard(card){
 
   const { pageIndex, slotIndex } = pendingPickSlotRef;
   if (slotIndex < 0){ pendingPickSlotRef = null; openSlotPicker(pageIndex, card); return; }
+  const _initPrice = getMarketPrice(card.tcgplayer);
   binderState.pages[pageIndex][slotIndex] = {
     cardId: card.id,
     name: card.name,
@@ -3571,8 +3591,11 @@ function placeCard(card){
     quantity: 1,
     condition: 'Near Mint',
     notes: '',
-    price: getMarketPrice(card.tcgplayer),
-    priceDetails: card.tcgplayer?.prices ? card.tcgplayer.prices : null
+    price: _initPrice,
+    priceDetails: card.tcgplayer?.prices ? card.tcgplayer.prices : null,
+    purchasePrice: null,
+    addedAt: Date.now(),
+    priceHistory: _initPrice != null ? [{ price: _initPrice, date: Date.now() }] : []
   };
   persist();
   hideOverlay();
@@ -3614,11 +3637,44 @@ function buildPriceSectionHTML(slot){
   const tcgQ       = encodeURIComponent((slot.name || '') + ' ' + (slot.set || ''));
   const tcgLink    = `https://www.tcgplayer.com/search/pokemon/product?q=${tcgQ}&view=grid`;
 
+  // ROI section — only if purchase price is set and current price exists
+  let roiHtml = '';
+  if (slot.purchasePrice != null && slot.price != null){
+    const gain    = slot.price - slot.purchasePrice;
+    const roiPct  = (gain / slot.purchasePrice) * 100;
+    const sign    = gain >= 0 ? '+' : '';
+    const cls     = gain >= 0 ? 'up' : 'down';
+    roiHtml = `<div class="roiSection">
+      <div class="roiRow"><span>Paid</span><span>$${slot.purchasePrice.toFixed(2)}</span></div>
+      <div class="roiRow"><span>Market</span><span>$${slot.price.toFixed(2)}</span></div>
+      <div class="roiRow" style="margin-top:4px;border-top:1px solid #dde8de;padding-top:4px;">
+        <span>ROI</span>
+        <span class="roiGain ${cls}">${sign}$${Math.abs(gain).toFixed(2)} (${sign}${roiPct.toFixed(1)}%)</span>
+      </div>
+    </div>`;
+  }
+
+  // Price history — last 5 entries, newest first
+  let histHtml = '';
+  const hist = slot.priceHistory;
+  if (hist && hist.length > 0){
+    const recent = hist.slice(-5).reverse();
+    const histRows = recent.map(h =>
+      `<tr><td>${fmtDate(h.date)}</td><td>$${Number(h.price).toFixed(2)}</td></tr>`
+    ).join('');
+    histHtml = `<div class="priceHistList">
+      <div style="font-size:10px;color:#999;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px;">Price History</div>
+      <table>${histRows}</table>
+    </div>`;
+  }
+
   return `<div id="priceSectionWrapper" class="priceSection">
     <div class="priceMain" style="flex-wrap:wrap;gap:4px;">
       <span>TCGPlayer Market: <strong style="color:${priceColor}">${mainPrice}</strong>${agoLabel}</span>
     </div>
     ${rows}
+    ${roiHtml}
+    ${histHtml}
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
       <button id="refreshPriceBtn" class="secondary" style="font-size:12px;flex:1;">&#8635; Refresh</button>
       <a href="${tcgLink}" target="_blank" rel="noopener"
@@ -3663,6 +3719,9 @@ function openDetailPanel(pageIndex, slotIndex){
         </select>
         <label>Notes</label>
         <textarea id="notesInput" rows="2">${escapeHtml(slot.notes || '')}</textarea>
+        <label>Purchase Price ($)</label>
+        <input type="number" id="purchasePriceInput" min="0" step="0.01" placeholder="What you paid"
+               value="${slot.purchasePrice != null ? slot.purchasePrice.toFixed(2) : ''}">
       </div>
     </div>
     ${buildPriceSectionHTML(slot)}
@@ -3821,6 +3880,8 @@ function saveDetail(){
   slot.quantity = parseInt(document.getElementById('qtyInput').value, 10) || 0;
   slot.condition = document.getElementById('condInput').value;
   slot.notes = document.getElementById('notesInput').value;
+  const pp = parseFloat(document.getElementById('purchasePriceInput').value);
+  slot.purchasePrice = isNaN(pp) ? null : pp;
   persist();
   hideOverlay();
   renderPage(currentSpread, null);
