@@ -2409,29 +2409,14 @@ function openCardViewer(pageIndex, slotIndex){
 }
 
 function buildCVPricesHTML(slot){
-  const LABELS = {
-    normal:'Normal', holofoil:'Holofoil',
-    reverseHolofoil:'Reverse Holo', '1stEditionHolofoil':'1st Ed Holo',
-    unlimitedHolofoil:'Unlimited Holo'
-  };
-  if (!slot?.priceDetails){
-    return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No TCGPlayer data available</div>';
+  if (slot?.price == null){
+    return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No price data for this card</div>';
   }
-  // Find the single variant that getMarketPrice() selected for this card
-  const ORDER = ['1stEditionHolofoil','unlimitedHolofoil','holofoil','reverseHolofoil','normal'];
-  let matchKey = ORDER.find(k => slot.priceDetails[k]?.market != null);
-  if (!matchKey) matchKey = Object.keys(slot.priceDetails).find(k => slot.priceDetails[k]?.market != null);
-  if (!matchKey) return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No price found</div>';
-
-  const p = slot.priceDetails[matchKey];
-  const label = LABELS[matchKey] || matchKey;
-  const range = (p.low != null && p.high != null)
-    ? `<span class="cvPriceRange">$${p.low.toFixed(2)} – $${p.high.toFixed(2)}</span>` : '';
   const ago = slot.priceUpdatedAt ? timeAgo(slot.priceUpdatedAt) : null;
   const footer = ago ? `<div style="font-size:10px;color:rgba(255,255,255,.25);margin-top:6px;text-align:right;">TCGPlayer · updated ${ago}</div>` : '';
   return `<div class="cvPriceRow">
-    <span class="cvPriceLabel">${escapeHtml(label)}</span>
-    <span><span class="cvPriceAmt">$${p.market.toFixed(2)}</span>${range}</span>
+    <span class="cvPriceLabel">Market Price</span>
+    <span class="cvPriceAmt">$${Number(slot.price).toFixed(2)}</span>
   </div>${footer}`;
 }
 
