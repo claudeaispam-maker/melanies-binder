@@ -807,6 +807,20 @@
   #cvCardOwned.owned  { background:rgba(80,180,100,0.2); color:#7ecb8f; }
   #cvCardOwned.missing{ background:rgba(220,80,80,0.2);  color:#e08888; }
   #cvActions{ margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  #cvPricesPanel{
+    display:none; margin-top:10px; width:min(320px,88vw);
+    background:rgba(255,255,255,0.08); border-radius:10px;
+    padding:10px 14px; text-align:left;
+  }
+  #cvPricesPanel.open{ display:block; }
+  .cvPriceRow{
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding:5px 0; border-bottom:1px solid rgba(255,255,255,0.08);
+  }
+  .cvPriceRow:last-child{ border-bottom:none; }
+  .cvPriceLabel{ font-size:12px; color:rgba(255,255,255,0.55); }
+  .cvPriceAmt{ font-size:14px; font-weight:700; color:#7ecb8f; }
+  .cvPriceRange{ font-size:10px; color:rgba(255,255,255,0.35); margin-left:6px; }
   .cvBtn{
     background:rgba(255,255,255,0.1);
     border:1px solid rgba(255,255,255,0.18);
@@ -1048,10 +1062,10 @@
     </div>
     <div id="cvActions">
       <button class="cvBtn cvPrimary" id="cvEditBtn">&#9998; Edit card</button>
-      <button class="cvBtn" id="cvEbayBtn">🛒 eBay Price</button>
-      <button class="cvBtn" id="cvWaifuBtn">📊 WaifuCards</button>
+      <button class="cvBtn" id="cvPricesBtn">💰 Sold Prices</button>
       <button class="cvBtn" id="cvClose2Btn">Close</button>
     </div>
+    <div id="cvPricesPanel"></div>
   </div>
 </div>
 
@@ -2358,14 +2372,24 @@ function openCardViewer(pageIndex, slotIndex){
     owEl.textContent = 'Missing'; owEl.className = 'missing';
   }
 
-  // Wire price-search buttons to this specific card each time the viewer opens
-  const cardName = slot.name || '';
-  document.getElementById('cvEbayBtn').onclick = () => {
-    const q = encodeURIComponent(cardName + ' kayou my little pony');
-    window.open(`https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1`, '_blank');
-  };
-  document.getElementById('cvWaifuBtn').onclick = () => {
-    window.open(`https://waifucards.app/sets/mlp?lang=en`, '_blank');
+  // Reset prices panel each time viewer opens
+  const cvPanel = document.getElementById('cvPricesPanel');
+  cvPanel.classList.remove('open');
+  cvPanel.innerHTML = '';
+
+  document.getElementById('cvPricesBtn').onclick = async () => {
+    if (cvPanel.classList.contains('open')){ cvPanel.classList.remove('open'); return; }
+    cvPanel.classList.add('open');
+    const ref = cvSlotRef;
+    if (!ref) return;
+    let s = (binderState.pages[ref.pageIndex] || [])[ref.slotIndex];
+    if (!s) return;
+    if (!s.priceDetails && s.cardId){
+      cvPanel.innerHTML = '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:6px;">Loading…</div>';
+      await fetchAndCachePrice(ref.pageIndex, ref.slotIndex);
+      s = (binderState.pages[ref.pageIndex] || [])[ref.slotIndex];
+    }
+    cvPanel.innerHTML = buildCVPricesHTML(s);
   };
 
   const v = document.getElementById('cardViewer');
@@ -2382,6 +2406,32 @@ function openCardViewer(pageIndex, slotIndex){
         document.getElementById('cvCardPrice').textContent = `$${Number(updated.price).toFixed(2)}`;
     });
   }
+}
+
+function buildCVPricesHTML(slot){
+  const LABELS = {
+    normal:'Normal', holofoil:'Holofoil',
+    reverseHolofoil:'Reverse Holo', '1stEditionHolofoil':'1st Ed Holo',
+    unlimitedHolofoil:'Unlimited Holo'
+  };
+  if (!slot?.priceDetails){
+    return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No TCGPlayer data available</div>';
+  }
+  let html = '';
+  for (const [key, p] of Object.entries(slot.priceDetails)){
+    if (!p || p.market == null) continue;
+    const label = LABELS[key] || key;
+    const range = (p.low != null && p.high != null)
+      ? `<span class="cvPriceRange">$${p.low.toFixed(2)} – $${p.high.toFixed(2)}</span>` : '';
+    html += `<div class="cvPriceRow">
+      <span class="cvPriceLabel">${escapeHtml(label)}</span>
+      <span><span class="cvPriceAmt">$${p.market.toFixed(2)}</span>${range}</span>
+    </div>`;
+  }
+  if (!html) return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No price variants found</div>';
+  const ago = slot.priceUpdatedAt ? timeAgo(slot.priceUpdatedAt) : null;
+  const footer = ago ? `<div style="font-size:10px;color:rgba(255,255,255,.25);margin-top:6px;text-align:right;">TCGPlayer · updated ${ago}</div>` : '';
+  return html + footer;
 }
 
 function closeCardViewer(){
