@@ -2417,21 +2417,22 @@ function buildCVPricesHTML(slot){
   if (!slot?.priceDetails){
     return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No TCGPlayer data available</div>';
   }
-  let html = '';
-  for (const [key, p] of Object.entries(slot.priceDetails)){
-    if (!p || p.market == null) continue;
-    const label = LABELS[key] || key;
-    const range = (p.low != null && p.high != null)
-      ? `<span class="cvPriceRange">$${p.low.toFixed(2)} – $${p.high.toFixed(2)}</span>` : '';
-    html += `<div class="cvPriceRow">
-      <span class="cvPriceLabel">${escapeHtml(label)}</span>
-      <span><span class="cvPriceAmt">$${p.market.toFixed(2)}</span>${range}</span>
-    </div>`;
-  }
-  if (!html) return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No price variants found</div>';
+  // Find the single variant that getMarketPrice() selected for this card
+  const ORDER = ['1stEditionHolofoil','unlimitedHolofoil','holofoil','reverseHolofoil','normal'];
+  let matchKey = ORDER.find(k => slot.priceDetails[k]?.market != null);
+  if (!matchKey) matchKey = Object.keys(slot.priceDetails).find(k => slot.priceDetails[k]?.market != null);
+  if (!matchKey) return '<div style="color:rgba(255,255,255,.4);font-size:12px;text-align:center;padding:4px;">No price found</div>';
+
+  const p = slot.priceDetails[matchKey];
+  const label = LABELS[matchKey] || matchKey;
+  const range = (p.low != null && p.high != null)
+    ? `<span class="cvPriceRange">$${p.low.toFixed(2)} – $${p.high.toFixed(2)}</span>` : '';
   const ago = slot.priceUpdatedAt ? timeAgo(slot.priceUpdatedAt) : null;
   const footer = ago ? `<div style="font-size:10px;color:rgba(255,255,255,.25);margin-top:6px;text-align:right;">TCGPlayer · updated ${ago}</div>` : '';
-  return html + footer;
+  return `<div class="cvPriceRow">
+    <span class="cvPriceLabel">${escapeHtml(label)}</span>
+    <span><span class="cvPriceAmt">$${p.market.toFixed(2)}</span>${range}</span>
+  </div>${footer}`;
 }
 
 function closeCardViewer(){
