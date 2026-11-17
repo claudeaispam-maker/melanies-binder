@@ -2943,14 +2943,7 @@ function openSearchPanel(pageIndex, slotIndex, prefillName = ''){
     <h2>🔍 Find a Card</h2>
     <input type="text" id="searchInput" placeholder="Card name, e.g. Charizard"
            value="${escapeHtml(prefillName)}" autocorrect="off">
-    <div style="display:flex;gap:4px;align-items:center;margin-top:4px;flex-wrap:wrap;">
-      <span style="font-size:11px;color:#888;white-space:nowrap;">Language:</span>
-      <button class="primary"   id="langEN"  style="padding:2px 8px;font-size:11px;">EN</button>
-      <button class="secondary" id="langJA"  style="padding:2px 8px;font-size:11px;">JA 🇯🇵</button>
-      <button class="secondary" id="langZH"  style="padding:2px 8px;font-size:11px;">ZH 🇨🇳</button>
-      <button class="secondary" id="langZHT" style="padding:2px 8px;font-size:11px;">繁中 🇹🇼</button>
-    </div>
-    <input type="text" id="searchSetFilter" placeholder="Set filter (optional, EN only)"
+    <input type="text" id="searchSetFilter" placeholder="Set filter (optional)"
            autocorrect="off" style="margin-top:4px;font-size:13px;color:#555;">
     <div style="display:flex;gap:8px;margin-top:6px;">
       <button class="primary" id="searchGoBtn" style="flex:1;">Search</button>
@@ -2964,17 +2957,6 @@ function openSearchPanel(pageIndex, slotIndex, prefillName = ''){
   document.getElementById('searchSetFilter').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   document.getElementById('searchGoBtn').addEventListener('click', doSearch);
   document.getElementById('searchCancelBtn').addEventListener('click', () => openSlotOptions(pageIndex, slotIndex));
-
-  const langMap = { langEN: 'en', langJA: 'ja', langZH: 'zh-Hans', langZHT: 'zh-Hant' };
-  Object.entries(langMap).forEach(([id, lang]) => {
-    document.getElementById(id).addEventListener('click', () => {
-      searchLang = lang;
-      Object.keys(langMap).forEach(k =>
-        document.getElementById(k).className = k === id ? 'primary' : 'secondary'
-      );
-      if (document.getElementById('searchInput').value.trim()) doSearch();
-    });
-  });
 
   if (prefillName) doSearch();
 }
@@ -3817,13 +3799,31 @@ function openResearchPanel(pageIndex, slotIndex){
     <p style="font-size:12px;color:#888;margin:0 0 8px 0;">Edit name or set below, then search. Your owned/qty/condition/notes stay.</p>
     <input type="text" id="rsName" value="${escapeHtml(prefillName)}" placeholder="Card name" autocorrect="off">
     <input type="text" id="rsSet"  value="${escapeHtml(prefillSet)}"  placeholder="Set filter (optional)" autocorrect="off"
-           style="font-size:13px;color:#555;margin-bottom:8px;">
+           style="font-size:13px;color:#555;margin-bottom:4px;">
+    <div style="display:flex;gap:4px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+      <span style="font-size:11px;color:#888;white-space:nowrap;">Language:</span>
+      <button class="primary"   id="rsLangEN"  style="padding:2px 8px;font-size:11px;">EN</button>
+      <button class="secondary" id="rsLangJA"  style="padding:2px 8px;font-size:11px;">JA 🇯🇵</button>
+      <button class="secondary" id="rsLangZH"  style="padding:2px 8px;font-size:11px;">ZH 🇨🇳</button>
+      <button class="secondary" id="rsLangZHT" style="padding:2px 8px;font-size:11px;">繁中 🇹🇼</button>
+    </div>
     <div style="display:flex;gap:8px;margin-bottom:4px;">
       <button class="primary" id="rsGoBtn" style="flex:1;">Search</button>
       <button class="secondary" id="rsCancelBtn">← Back to Edit</button>
     </div>
     <div id="resultsGrid"></div>
   `);
+
+  const rsLangMap = { rsLangEN: 'en', rsLangJA: 'ja', rsLangZH: 'zh-Hans', rsLangZHT: 'zh-Hant' };
+  Object.entries(rsLangMap).forEach(([id, lang]) => {
+    document.getElementById(id).addEventListener('click', () => {
+      searchLang = lang;
+      Object.keys(rsLangMap).forEach(k =>
+        document.getElementById(k).className = k === id ? 'primary' : 'secondary'
+      );
+      if (document.getElementById('rsName').value.trim()) doRS();
+    });
+  });
 
   const doRS = async () => {
     const q   = document.getElementById('rsName').value.trim();
@@ -3832,7 +3832,12 @@ function openResearchPanel(pageIndex, slotIndex){
     if (!q){ el.innerHTML = '<div class="emptyMsg">Type a card name to search.</div>'; return; }
     el.innerHTML = '<div class="loadingMsg">Searching…</div>';
     try {
-      const cards = await searchTCGForCard(q, set, '', {}, { returnAll: true, limit: 9 });
+      let cards;
+      if (searchLang !== 'en'){
+        cards = await searchTCGDex(q, searchLang);
+      } else {
+        cards = await searchTCGForCard(q, set, '', {}, { returnAll: true, limit: 9 });
+      }
       if (!cards || !cards.length){
         el.innerHTML = '<div class="emptyMsg">No results. Try a different name or set.</div>'; return;
       }
