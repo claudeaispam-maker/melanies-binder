@@ -3607,29 +3607,6 @@ function setNameQ(setName){
 function placeCard(card){
   if (!pendingPickSlotRef) return;
 
-  // batch pick mode: user chose a card from candidates — go straight to slot picker
-  if (pendingPickSlotRef.isBatchPick){
-    const { batchIndex } = pendingPickSlotRef;
-    pendingPickSlotRef = null;
-    batchResults[batchIndex].card   = card;
-    batchResults[batchIndex].status = 'identified';
-    hideOverlay();
-    openBatchSlotPicker(batchIndex, card);
-    return;
-  }
-
-  // batch search mode: user searched manually — go straight to slot picker
-  if (pendingPickSlotRef.isBatchSearch){
-    const { batchIndex } = pendingPickSlotRef;
-    pendingPickSlotRef = null;
-    batchResults[batchIndex].card       = card;
-    batchResults[batchIndex].candidates = [card];
-    batchResults[batchIndex].status     = 'identified';
-    hideOverlay();
-    openBatchSlotPicker(batchIndex, card);
-    return;
-  }
-
   // scan-fix mode: update review data instead of writing to binder directly
   if (pendingPickSlotRef.isScanFix){
     const { scanSlotIndex } = pendingPickSlotRef;
@@ -4567,6 +4544,9 @@ async function runBatchScan(files){
     }
   }
 
+  const pb2 = document.getElementById('batchProgBar');
+  if (pb2) pb2.style.width = '100%';
+  await new Promise(r => setTimeout(r, 200));
   hideOverlay();
   openBatchReviewPanel();
 }
@@ -4632,13 +4612,86 @@ function openBatchReviewPanel(){
 function batchPickCard(batchIndex){
   const r = batchResults[batchIndex];
   if (!r.candidates || !r.candidates.length) return;
-  pendingPickSlotRef = { isBatchPick: true, batchIndex };
-  openCandidatePicker(r.candidates, 0, -1, r.guess || {});
+
+  const itemsHtml = r.candidates.map((c, ci) => {
+    const img = c.images?.large || c.images?.small || c.image || '';
+    return `<div class="batchSrRow" data-ci="${ci}" style="display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid #eee;cursor:pointer;">
+      ${img ? `<img src="${img}" style="width:48px;height:67px;object-fit:cover;border-radius:4px;flex-shrink:0;">` : '<div style="width:48px;height:67px;background:#eee;border-radius:4px;flex-shrink:0;"></div>'}
+      <div>
+        <div style="font-weight:600;font-size:13px;">${escapeHtml(c.name)}</div>
+        <div style="font-size:11px;color:#888;">${escapeHtml(c.set?.name || c.set || '')}</div>
+        ${c.number ? `<div style="font-size:11px;color:#aaa;">#${escapeHtml(c.number)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  showOverlay(`
+    <h2 style="margin-bottom:8px;">Pick the right card</h2>
+    <div style="max-height:65vh;overflow-y:auto;border:1px solid #eee;border-radius:8px;">${itemsHtml}</div>
+    <div class="closeRow" style="margin-top:12px;">
+      <button class="secondary" id="batchPickBackBtn">← Back to Review</button>
+    </div>
+  `);
+
+  document.getElementById('batchPickBackBtn').addEventListener('click', openBatchReviewPanel);
+  document.querySelectorAll('.batchSrRow').forEach(el => {
+    el.addEventListener('click', () => {
+      const card = r.candidates[parseInt(el.dataset.ci)];
+      batchResults[batchIndex].card   = card;
+      batchResults[batchIndex].status = 'identified';
+      openBatchSlotPicker(batchIndex, card);
+    });
+  });
 }
 
 function batchSearchCard(batchIndex){
-  pendingPickSlotRef = { isBatchSearch: true, batchIndex };
-  openSearchPanel(0, -1);
+  showOverlay(`
+    <h2>🔍 Find a Card</h2>
+    <input type="text" id="batchSrInput" placeholder="Card name…" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:8px;font-size:14px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button class="primary" id="batchSrGoBtn" style="flex:1;">Search</button>
+      <button class="secondary" id="batchSrBackBtn">← Back</button>
+    </div>
+    <div id="batchSrResults"></div>
+  `);
+
+  document.getElementById('batchSrBackBtn').addEventListener('click', openBatchReviewPanel);
+
+  const doSearch = async () => {
+    const q = document.getElementById('batchSrInput')?.value.trim();
+    if (!q) return;
+    const el = document.getElementById('batchSrResults');
+    if (!el) return;
+    el.innerHTML = '<div style="text-align:center;color:#888;padding:12px;">Searching…</div>';
+    const cards = await searchTCGForCard(q, '', '', {}, { returnAll: true, limit: 9 });
+    if (!cards || !cards.length){
+      el.innerHTML = '<div style="text-align:center;color:#888;padding:12px;">No results found.</div>';
+      return;
+    }
+    el.innerHTML = cards.map((c, ci) => {
+      const img = c.images?.large || c.images?.small || '';
+      return `<div class="batchSrRow" data-ci="${ci}" style="display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid #eee;cursor:pointer;">
+        ${img ? `<img src="${img}" style="width:48px;height:67px;object-fit:cover;border-radius:4px;flex-shrink:0;">` : '<div style="width:48px;height:67px;background:#eee;border-radius:4px;flex-shrink:0;"></div>'}
+        <div>
+          <div style="font-weight:600;font-size:13px;">${escapeHtml(c.name)}</div>
+          <div style="font-size:11px;color:#888;">${escapeHtml(c.set?.name || '')}</div>
+          ${c.number ? `<div style="font-size:11px;color:#aaa;">#${escapeHtml(c.number)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    document.querySelectorAll('.batchSrRow').forEach(row => {
+      row.addEventListener('click', () => {
+        const card = cards[parseInt(row.dataset.ci)];
+        batchResults[batchIndex].card       = card;
+        batchResults[batchIndex].candidates = [card];
+        batchResults[batchIndex].status     = 'identified';
+        openBatchSlotPicker(batchIndex, card);
+      });
+    });
+  };
+
+  document.getElementById('batchSrGoBtn').addEventListener('click', doSearch);
+  document.getElementById('batchSrInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 }
 
 function batchPlaceCard(batchIndex){
