@@ -918,6 +918,16 @@
   .slotPickerCell.empty:hover{ border-color:#8830e8; transform:scale(1.05); background:#d8b8ff; }
   .slotPickerCell.filled{ border-color:#ccc; cursor:not-allowed; opacity:.7; }
   .slotPickerCell img{ width:100%; height:100%; object-fit:cover; }
+
+  /* ── Batch scan ── */
+  .batchRow{ display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid #eee; }
+  .batchRow:last-child{ border-bottom:none; }
+  .batchThumb{ width:52px;height:52px;object-fit:cover;border-radius:4px;flex-shrink:0; }
+  .batchCardThumb{ width:40px;height:56px;object-fit:cover;border-radius:3px;flex-shrink:0; }
+  .batchCardEmpty{ width:40px;height:56px;background:#f0f0f0;border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px; }
+  .batchInfo{ flex:1;min-width:0; }
+  .batchActions{ display:flex;flex-direction:column;gap:4px;flex-shrink:0; }
+  .batchActions button{ font-size:11px;padding:4px 8px; }
   .slotPickerNum{
     position:absolute; top:3px; left:4px;
     background:rgba(0,0,0,0.55); color:#fff;
@@ -968,6 +978,7 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:0">
+      <button id="batchScanBtn" title="Scan multiple cards at once">📸 Batch</button>
       <button id="fogBtn" title="Toggle fog reveal mode">🌫 Fog</button>
       <button id="resetFogBtn" title="Re-apply fog to all cards on this page">↺ Reset</button>
       <button id="galleryBtn" title="Switch to gallery view">⊞ Gallery</button>
@@ -1078,6 +1089,7 @@
 
 <!-- hidden file input for scan — no capture attr so iOS shows "Take Photo / Choose from Library" -->
 <input type="file" id="scanFileInput" accept="image/*" style="display:none">
+<input type="file" id="batchScanFileInput" accept="image/*" multiple style="display:none">
 
 <script>
 /* =====================================================================
@@ -3595,6 +3607,29 @@ function setNameQ(setName){
 function placeCard(card){
   if (!pendingPickSlotRef) return;
 
+  // batch pick mode: user chose a card from candidates — go straight to slot picker
+  if (pendingPickSlotRef.isBatchPick){
+    const { batchIndex } = pendingPickSlotRef;
+    pendingPickSlotRef = null;
+    batchResults[batchIndex].card   = card;
+    batchResults[batchIndex].status = 'identified';
+    hideOverlay();
+    openBatchSlotPicker(batchIndex, card);
+    return;
+  }
+
+  // batch search mode: user searched manually — go straight to slot picker
+  if (pendingPickSlotRef.isBatchSearch){
+    const { batchIndex } = pendingPickSlotRef;
+    pendingPickSlotRef = null;
+    batchResults[batchIndex].card       = card;
+    batchResults[batchIndex].candidates = [card];
+    batchResults[batchIndex].status     = 'identified';
+    hideOverlay();
+    openBatchSlotPicker(batchIndex, card);
+    return;
+  }
+
   // scan-fix mode: update review data instead of writing to binder directly
   if (pendingPickSlotRef.isScanFix){
     const { scanSlotIndex } = pendingPickSlotRef;
@@ -4449,6 +4484,250 @@ async function processSingleCardFile(file, pageIndex, slotIndex){
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+//  BATCH SCAN
+// ══════════════════════════════════════════════════════════════
+
+let batchResults = [];
+const batchScanFileInput = document.getElementById('batchScanFileInput');
+
+function openBatchScan(){
+  if (!binderState.anthropicKey){
+    toast('Add your Claude API key in ⚙ Settings to use batch scanning.');
+    return;
+  }
+  batchScanFileInput.value = '';
+  batchScanFileInput.click();
+}
+
+batchScanFileInput.addEventListener('change', async (e) => {
+  let files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  if (files.length > 10){
+    toast('Only 10 photos at a time — using first 10.');
+    files = files.slice(0, 10);
+  }
+  await runBatchScan(files);
+});
+
+async function runBatchScan(files){
+  batchResults = files.map(() => ({ thumb: null, guess: null, candidates: [], card: null, status: 'scanning', placedPage: null, placedSlot: null }));
+
+  showOverlay(`
+    <h2>📸 Batch Scan</h2>
+    <div style="text-align:center;padding:20px 0;">
+      <div id="batchProgText" style="font-size:14px;color:#555;margin-bottom:12px;">Starting…</div>
+      <div style="background:#eee;border-radius:8px;height:10px;overflow:hidden;max-width:280px;margin:0 auto;">
+        <div id="batchProgBar" style="height:100%;background:var(--leather);border-radius:8px;width:0%;transition:width .3s;"></div>
+      </div>
+    </div>
+  `);
+
+  for (let i = 0; i < files.length; i++){
+    const pt = document.getElementById('batchProgText');
+    const pb = document.getElementById('batchProgBar');
+    if (pt) pt.textContent = `Scanning photo ${i + 1} of ${files.length}…`;
+    if (pb) pb.style.width = Math.round((i / files.length) * 100) + '%';
+
+    try {
+      const dataUrl = await fileToDataUrl(files[i]);
+      const resized  = await resizeImage(dataUrl, 800);
+      batchResults[i].thumb = await resizeImage(dataUrl, 120);
+
+      const guess = await identifySingleCard(resized, binderState.anthropicKey);
+      batchResults[i].guess = guess;
+
+      if (!guess || guess.name === 'unknown'){
+        batchResults[i].status = 'flagged';
+        continue;
+      }
+
+      const isNonEn    = guess.lang && guess.lang !== 'en';
+      const searchName = isNonEn ? (guess.name_en || guess.name) : guess.name;
+      const [enCands, jaCands] = await Promise.all([
+        searchTCGForCard(searchName, guess.set, guess.number,
+          { artist: guess.artist, hp: guess.hp, lang: guess.lang },
+          { returnAll: true, limit: 6 }),
+        isNonEn ? searchTCGDex(guess.name, guess.lang) : Promise.resolve([])
+      ]);
+      const seenIds  = new Set((enCands || []).map(c => c.id));
+      const candidates = [...(enCands || []), ...(jaCands || []).filter(c => !seenIds.has(c.id))].slice(0, 6);
+
+      if (!candidates.length){
+        batchResults[i].status = 'flagged';
+        continue;
+      }
+      batchResults[i].candidates = candidates;
+      batchResults[i].card       = candidates[0];
+      batchResults[i].status     = 'identified';
+
+    } catch(err){
+      console.error('Batch scan error on photo', i + 1, err);
+      batchResults[i].status = 'flagged';
+    }
+  }
+
+  hideOverlay();
+  openBatchReviewPanel();
+}
+
+function openBatchReviewPanel(){
+  const placed     = batchResults.filter(r => r.status === 'placed').length;
+  const identified = batchResults.filter(r => r.status === 'identified').length;
+  const flagged    = batchResults.filter(r => r.status === 'flagged').length;
+
+  const rowsHtml = batchResults.map((r, i) => {
+    const thumb     = r.thumb
+      ? `<img class="batchThumb" src="${r.thumb}" alt="photo ${i+1}">`
+      : `<div class="batchThumb" style="background:#eee;"></div>`;
+    const cardImg   = r.card?.images?.large || r.card?.images?.small || r.card?.image || '';
+    const cardThumb = cardImg
+      ? `<img class="batchCardThumb" src="${cardImg}" alt="${escapeHtml(r.card?.name||'')}">`
+      : `<div class="batchCardEmpty">❓</div>`;
+
+    let info = '', actions = '';
+    if (r.status === 'identified'){
+      info    = `<div style="font-weight:600;font-size:13px;">${escapeHtml(r.card.name)}</div>
+                 <div style="font-size:11px;color:#888;">${escapeHtml(r.card.set?.name || '')}</div>`;
+      actions = `<div class="batchActions">
+                   <button class="secondary" onclick="batchPickCard(${i})">🔍 Pick</button>
+                   <button class="primary"   onclick="batchPlaceCard(${i})">📌 Place</button>
+                 </div>`;
+    } else if (r.status === 'flagged'){
+      info    = `<div style="color:#c55;font-size:12px;font-weight:600;">⚠️ Not identified</div>
+                 ${r.guess?.name && r.guess.name !== 'unknown' ? `<div style="font-size:11px;color:#aaa;">AI guess: ${escapeHtml(r.guess.name)}</div>` : ''}`;
+      actions = `<div class="batchActions">
+                   <button class="secondary" onclick="batchSearchCard(${i})">🔍 Search</button>
+                 </div>`;
+    } else if (r.status === 'placed'){
+      info    = `<div style="color:#3a9;font-size:12px;font-weight:600;">✅ Placed</div>
+                 <div style="font-size:11px;color:#888;">${escapeHtml(r.card?.name||'')} · Page ${(r.placedPage||0)+1}, Slot ${(r.placedSlot||0)+1}</div>`;
+    }
+
+    return `<div class="batchRow" id="batchRow${i}">
+      ${thumb}
+      ${r.status !== 'flagged' ? cardThumb : `<div class="batchCardEmpty">❓</div>`}
+      <div class="batchInfo">${info}</div>
+      ${actions}
+    </div>`;
+  }).join('');
+
+  showOverlay(`
+    <h2 style="margin-bottom:4px;">📸 Batch Scan Results</h2>
+    <div style="font-size:12px;color:#888;margin-bottom:10px;">${batchResults.length} photos · ${identified} ready · ${placed} placed · ${flagged} flagged</div>
+    <div style="max-height:58vh;overflow-y:auto;border:1px solid #eee;border-radius:8px;">
+      ${rowsHtml}
+    </div>
+    <div class="closeRow" style="margin-top:12px;">
+      <button class="primary" id="batchDoneBtn" style="width:100%;">Done</button>
+    </div>
+  `);
+
+  document.getElementById('batchDoneBtn').addEventListener('click', () => {
+    hideOverlay();
+    renderAll();
+  });
+}
+
+function batchPickCard(batchIndex){
+  const r = batchResults[batchIndex];
+  if (!r.candidates || !r.candidates.length) return;
+  pendingPickSlotRef = { isBatchPick: true, batchIndex };
+  openCandidatePicker(r.candidates, 0, -1, r.guess || {});
+}
+
+function batchSearchCard(batchIndex){
+  pendingPickSlotRef = { isBatchSearch: true, batchIndex };
+  openSearchPanel(0, -1);
+}
+
+function batchPlaceCard(batchIndex){
+  const r = batchResults[batchIndex];
+  if (!r.card) return;
+  openBatchSlotPicker(batchIndex, r.card);
+}
+
+function openBatchSlotPicker(batchIndex, card){
+  let pageIndex = currentSpread;
+
+  function renderPicker(){
+    const page     = binderState.pages[pageIndex] || [];
+    const cardImg  = card.images?.large || card.images?.small || card.image || '';
+    const cardName = card.name || '';
+    const cardSet  = card.set?.name || '';
+    const total    = binderState.pages.length;
+
+    let cellsHtml = '';
+    for (let i = 0; i < 9; i++){
+      const ex = page[i];
+      if (ex){
+        cellsHtml += `<div class="slotPickerCell filled">
+          <span class="slotPickerNum">${i+1}</span>
+          ${ex.image ? `<img src="${ex.image}" alt="${escapeHtml(ex.name)}">` : '<span style="font-size:10px;color:#aaa">filled</span>'}
+        </div>`;
+      } else {
+        cellsHtml += `<div class="slotPickerCell empty" data-slot="${i}">
+          <span class="slotPickerNum">${i+1}</span>
+          <span style="font-size:20px;margin-top:4px;">+</span>
+          <span style="font-size:10px;margin-top:2px;">slot ${i+1}</span>
+        </div>`;
+      }
+    }
+
+    showOverlay(`
+      <h2 style="margin-bottom:8px;">Choose a slot</h2>
+      <div class="slotPickerCard">
+        ${cardImg ? `<img src="${cardImg}" alt="${escapeHtml(cardName)}">` : ''}
+        <div>
+          <strong>${escapeHtml(cardName)}</strong>
+          <div style="font-size:12px;color:#888;margin-top:2px;">${escapeHtml(cardSet)}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:8px 0;">
+        <button class="secondary" id="bsPagePrev" ${pageIndex === 0 ? 'disabled' : ''} style="padding:4px 12px;">◀</button>
+        <span style="font-size:14px;font-weight:600;">Page ${pageIndex + 1} of ${total}</span>
+        <button class="secondary" id="bsPageNext" ${pageIndex === total - 1 ? 'disabled' : ''} style="padding:4px 12px;">▶</button>
+      </div>
+      <div class="slotPickerGrid">${cellsHtml}</div>
+      <div class="closeRow" style="margin-top:12px;">
+        <button class="secondary" id="bsBackBtn">← Back to Review</button>
+      </div>
+    `);
+
+    document.getElementById('bsPagePrev')?.addEventListener('click', () => { pageIndex--; renderPicker(); });
+    document.getElementById('bsPageNext')?.addEventListener('click', () => { pageIndex++; renderPicker(); });
+    document.getElementById('bsBackBtn').addEventListener('click', openBatchReviewPanel);
+
+    document.querySelectorAll('.slotPickerCell.empty').forEach(cell => {
+      cell.addEventListener('click', () => {
+        const slotIndex   = parseInt(cell.dataset.slot);
+        const _imgUrl     = card.images?.large || card.images?.small || card.image || '';
+        const _initPrice  = getMarketPrice(card.tcgplayer);
+        cacheCardImage(card.id, _imgUrl);
+        binderState.pages[pageIndex][slotIndex] = {
+          cardId: card.id, name: card.name, image: _imgUrl,
+          set: card.set?.name || '', owned: true, quantity: 1,
+          condition: 'Near Mint', notes: '',
+          price: _initPrice,
+          priceDetails: card.tcgplayer?.prices || null,
+          purchasePrice: null, addedAt: Date.now(),
+          priceHistory: _initPrice != null ? [{ price: _initPrice, date: Date.now() }] : []
+        };
+        batchResults[batchIndex].status     = 'placed';
+        batchResults[batchIndex].placedPage = pageIndex;
+        batchResults[batchIndex].placedSlot = slotIndex;
+        persist();
+        renderPage(currentSpread, null);
+        updateSummary();
+        toast(`${card.name} → Page ${pageIndex + 1}, Slot ${slotIndex + 1}`);
+        openBatchReviewPanel();
+      });
+    });
+  }
+
+  renderPicker();
+}
+
 // ---- card confirm panel ----
 // Shown after any search result is tapped. Displays full card details before committing.
 // backFn() re-opens whatever panel the user came from so they can pick a different card.
@@ -5154,6 +5433,8 @@ function showSharePanel(url, opts){
 /* ---------------------------------------------------------------------
    SETTINGS PANEL (API key)
 --------------------------------------------------------------------- */
+document.getElementById('batchScanBtn').addEventListener('click', openBatchScan);
+
 document.getElementById('settingsBtn').addEventListener('click', () => {
   showOverlay(`
     <h2>Settings</h2>
