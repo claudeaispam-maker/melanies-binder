@@ -1182,6 +1182,27 @@ function saveLocal(){
   try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(binderState)); }catch(e){}
 }
 
+/* ── Card image cache (cardId → imageUrl) ───────────────────────────── */
+const IMG_CACHE_KEY = 'melanies_binder_imgcache';
+let cardImgCache = {};
+function loadImgCache(){
+  try{ cardImgCache = JSON.parse(localStorage.getItem(IMG_CACHE_KEY)) || {}; }catch(e){ cardImgCache = {}; }
+}
+function saveImgCache(){
+  try{ localStorage.setItem(IMG_CACHE_KEY, JSON.stringify(cardImgCache)); }catch(e){}
+}
+function cacheCardImage(cardId, imageUrl){
+  if (!cardId || !imageUrl) return;
+  if (cardImgCache[cardId] === imageUrl) return;
+  cardImgCache[cardId] = imageUrl;
+  saveImgCache();
+}
+function backfillImgCache(){
+  binderState.pages.forEach(page =>
+    page.forEach(slot => { if (slot?.cardId && slot?.image) cacheCardImage(slot.cardId, slot.image); })
+  );
+}
+
 async function loadBinder(){
   showLoading("Loading your binder…");
   if (firebaseReady){
@@ -1212,6 +1233,8 @@ async function loadBinder(){
     if (local) binderState = normalizeLoaded(local);
   }
   hideLoading();
+  loadImgCache();
+  backfillImgCache();
   renderAll();
   loadCorrections();
   initCoverImage();
@@ -3577,10 +3600,12 @@ function placeCard(card){
     const { scanSlotIndex } = pendingPickSlotRef;
     const hash = scanReviewData[scanSlotIndex]?.hash;
     const cellDataUrl = scanReviewData[scanSlotIndex]?.cellDataUrl;
+    const _scanImg = card.images.large || card.images.small;
+    cacheCardImage(card.id, _scanImg);
     scanReviewData[scanSlotIndex] = {
       cardId: card.id,
       name: card.name,
-      image: card.images.large || card.images.small,
+      image: _scanImg,
       set: card.set?.name || '',
       confidence: 'fixed',
       hash,
@@ -3600,10 +3625,12 @@ function placeCard(card){
   const { pageIndex, slotIndex } = pendingPickSlotRef;
   if (slotIndex < 0){ pendingPickSlotRef = null; openSlotPicker(pageIndex, card); return; }
   const _initPrice = getMarketPrice(card.tcgplayer);
+  const _imgUrl = card.images.large || card.images.small;
+  cacheCardImage(card.id, _imgUrl);
   binderState.pages[pageIndex][slotIndex] = {
     cardId: card.id,
     name: card.name,
-    image: card.images.large || card.images.small,
+    image: _imgUrl,
     set: card.set ? card.set.name : '',
     owned: true,
     quantity: 1,
