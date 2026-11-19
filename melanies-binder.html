@@ -335,6 +335,22 @@
     border-radius:0 0 4px 4px;
   }
   .pocket .priceBadge.loading{ color:rgba(255,224,102,0.45); font-weight:400; }
+  /* ── Price tier border glow ── */
+  .pocket.tier-low       { box-shadow: 0 0 0 2px rgba(220,220,220,0.9), 0 0 8px 2px rgba(255,255,255,0.35); }
+  .pocket.tier-uncommon  { box-shadow: 0 0 0 2px #4caf50, 0 0 8px 2px rgba(76,175,80,0.55); }
+  .pocket.tier-rare      { box-shadow: 0 0 0 2px #2196f3, 0 0 8px 2px rgba(33,150,243,0.55); }
+  .pocket.tier-epic      { box-shadow: 0 0 0 2px #9c27b0, 0 0 10px 3px rgba(156,39,176,0.55); }
+  .pocket.tier-legendary { animation: tierPulse 2.5s ease-in-out infinite; }
+  @keyframes tierPulse {
+    0%,100% { box-shadow: 0 0 0 2px #ffa726, 0 0 12px 3px rgba(255,167,38,0.65); }
+    50%     { box-shadow: 0 0 0 2px #ffcc02, 0 0 20px 6px rgba(255,204,2,0.75); }
+  }
+  /* Price badge tint per tier */
+  .pocket.tier-low      .priceBadge { background:rgba(200,200,200,0.8); color:#111; }
+  .pocket.tier-uncommon .priceBadge { background:rgba(27,94,32,0.88); color:#a5d6a7; }
+  .pocket.tier-rare     .priceBadge { background:rgba(13,71,161,0.88); color:#90caf9; }
+  .pocket.tier-epic     .priceBadge { background:rgba(74,20,140,0.88); color:#e1bee7; }
+  .pocket.tier-legendary .priceBadge { background:rgba(180,60,0,0.88); color:#ffe082; }
   /* detail panel price section */
   .priceSection{
     margin-top:10px; padding:10px; background:#fafafa;
@@ -2214,6 +2230,18 @@ function updateSummary(){
   document.getElementById('missingCount').textContent = missing;
 }
 
+const PRICE_TIERS = [
+  { min:100, cls:'tier-legendary', label:'$100+' },
+  { min: 50, cls:'tier-epic',      label:'$50–$100' },
+  { min: 20, cls:'tier-rare',      label:'$20–$50' },
+  { min:  5, cls:'tier-uncommon',  label:'$5–$20' },
+  { min:  1, cls:'tier-low',       label:'$1–$5' },
+];
+function getPriceTier(price){
+  if (price == null || price < 1) return null;
+  return PRICE_TIERS.find(t => price >= t.min) || null;
+}
+
 function buildPageFaceEl(pageIndex){
   const face = document.createElement('div');
   face.className = 'pageFace';
@@ -2278,6 +2306,10 @@ function buildPocketEl(pageIndex, slotIndex, slot){
       priceBadge.textContent = '…';
     }
     pocket.appendChild(priceBadge);
+
+    // Apply price tier glow
+    const _tier = getPriceTier(slot.price);
+    if (_tier) pocket.classList.add(_tier.cls);
 
     // Fog canvas — added on top when fog mode is active; sized + drawn later
     // in initFogCanvases() once the element is in the DOM and has real dimensions
@@ -2375,6 +2407,13 @@ async function fetchAndCachePrice(pageIndex, slotIndex){
     if (badgeEl){
       badgeEl.classList.remove('loading');
       badgeEl.textContent = price != null ? `$${price.toFixed(2)}` : '—';
+    }
+    // Update tier glow now that price is known
+    const pocketEl = document.getElementById(`pocket-${pageIndex}-${slotIndex}`);
+    if (pocketEl) {
+      PRICE_TIERS.forEach(t => pocketEl.classList.remove(t.cls));
+      const tier = getPriceTier(price);
+      if (tier) pocketEl.classList.add(tier.cls);
     }
   } catch(e){
     // On any error (network, 404, rate-limit) just show a dash — non-fatal
