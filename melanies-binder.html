@@ -1194,6 +1194,106 @@ function saveLocal(){
   try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(binderState)); }catch(e){}
 }
 
+/* ── Export / Import helpers ─────────────────────────────────── */
+function downloadBlob(content, filename, mimeType){
+  const blob = new Blob([content], { type: mimeType });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function exportBinderJSON(){
+  const date = new Date().toISOString().split('T')[0];
+  downloadBlob(JSON.stringify(binderState, null, 2), `melanies-binder-${date}.json`, 'application/json');
+  toast('Binder exported as JSON.');
+}
+
+function buildExportHTML(){
+  const date  = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const cards = [];
+  binderState.pages.forEach((page, pi) =>
+    page.forEach((slot, si) => { if (slot) cards.push({ ...slot, _page: pi+1, _slot: si+1 }); })
+  );
+  const owned = cards.filter(c => c.owned).length;
+
+  const cardRows = cards.map(c => `
+    <div class="card${c.owned ? ' owned' : ''}">
+      ${c.image ? `<img src="${c.image}" alt="${(c.name||'').replace(/"/g,'&quot;')}" loading="lazy">` : '<div class="no-img">?</div>'}
+      <div class="info">
+        <div class="cname">${(c.name||'Unknown').replace(/</g,'&lt;')}</div>
+        <div class="cset">${(c.set||'').replace(/</g,'&lt;')}</div>
+        ${c.price != null ? `<div class="cprice">$${Number(c.price).toFixed(2)}</div>` : ''}
+        <div class="cloc">Page ${c._page} · Slot ${c._slot}</div>
+      </div>
+    </div>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Melanie's Binder — ${date}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1a1208;color:#eee;min-height:100vh}
+header{background:#3d2910;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #5a3a18}
+h1{font-size:18px;color:#f0d070;font-weight:700}
+.meta{font-size:12px;color:#a08060;margin-top:3px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;padding:14px}
+.card{background:#2a1f0e;border-radius:8px;overflow:hidden;border:1px solid #4a3520}
+.card.owned{border-color:#2d6e3a}
+.card img{width:100%;aspect-ratio:2.5/3.5;object-fit:cover;display:block}
+.no-img{width:100%;aspect-ratio:2.5/3.5;background:#3a2a10;display:flex;align-items:center;justify-content:center;font-size:28px;color:#6a5030}
+.info{padding:7px}
+.cname{font-size:12px;font-weight:600;color:#f0e0c0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cset{font-size:10px;color:#8a7060;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cprice{font-size:11px;color:#50c878;margin-top:3px;font-weight:600}
+.cloc{font-size:10px;color:#6a5040;margin-top:2px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Melanie's Binder</h1>
+    <div class="meta">Saved ${date} &nbsp;·&nbsp; ${owned} / ${cards.length} cards owned</div>
+  </div>
+</header>
+<div class="grid">${cardRows}</div>
+</body>
+</html>`;
+}
+
+function exportBinderHTML(){
+  const date = new Date().toISOString().split('T')[0];
+  downloadBlob(buildExportHTML(), `melanies-binder-${date}.html`, 'text/html');
+  toast('Binder saved as HTML file.');
+}
+
+const importJsonInput = document.createElement('input');
+importJsonInput.type = 'file'; importJsonInput.accept = '.json,application/json';
+importJsonInput.style.display = 'none';
+document.body.appendChild(importJsonInput);
+
+importJsonInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (!data.pages || !Array.isArray(data.pages)) throw new Error('Not a valid binder export.');
+    if (!confirm(`Import "${file.name}"? This will overwrite your current binder. This cannot be undone.`)) return;
+    binderState = normalizeLoaded(data);
+    persist();
+    hideOverlay();
+    renderAll();
+    toast('Binder imported successfully.');
+  } catch(err) {
+    toast('Import failed: ' + (err.message || 'Invalid file.'));
+  }
+  importJsonInput.value = '';
+});
+
 /* ── Card image cache (cardId → imageUrl) ───────────────────────────── */
 const IMG_CACHE_KEY = 'melanies_binder_imgcache';
 let cardImgCache = {};
@@ -5498,6 +5598,17 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
       </p>
       <button class="primary" id="generateShareBtn" style="width:100%;">Generate Share Link</button>
     </div>
+    <div style="background:#f0fff4;border:1px solid #b2dfbc;border-radius:8px;padding:12px;margin-bottom:14px;">
+      <div style="font-weight:700;color:#1e6b3a;margin-bottom:4px;">💾 Save / Export Binder</div>
+      <p style="font-size:12px;color:#555;margin:0 0 10px 0;">
+        Save a copy of your binder to your device. Use JSON for a full backup you can restore later, or HTML for a file you can open in any browser.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="primary" id="exportJsonBtn" style="width:100%;">⬇ Export JSON (backup &amp; restore)</button>
+        <button class="primary" id="exportHtmlBtn" style="width:100%;">💾 Save as HTML file (offline viewer)</button>
+        <button class="secondary" id="importJsonBtn" style="width:100%;">⬆ Import JSON (restore from backup)</button>
+      </div>
+    </div>
     <label style="font-size:12px;color:#555;">Pokémon TCG API key (optional — raises search rate limit)</label>
     <input type="text" id="apiKeyInput" placeholder="Paste TCG API key here" value="${escapeHtml(binderState.apiKey || '')}">
     <p style="font-size:12px;color:#888;margin-top:4px;">
@@ -5532,6 +5643,9 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
   `);
   document.getElementById('revealCooldownSelect').value = binderState.revealCooldown || 'none';
   document.getElementById('generateShareBtn').addEventListener('click', openShareOptions);
+  document.getElementById('exportJsonBtn').addEventListener('click', exportBinderJSON);
+  document.getElementById('exportHtmlBtn').addEventListener('click', exportBinderHTML);
+  document.getElementById('importJsonBtn').addEventListener('click', () => { importJsonInput.value = ''; importJsonInput.click(); });
   document.getElementById('saveSettingsBtn').addEventListener('click', () => {
     binderState.apiKey = document.getElementById('apiKeyInput').value.trim();
     binderState.anthropicKey = document.getElementById('anthropicKeyInput').value.trim();
