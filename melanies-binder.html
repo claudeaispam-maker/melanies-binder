@@ -77,6 +77,16 @@
     position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
     perspective: 2000px; z-index: 50;
   }
+  #coverHubBtn{
+    position:absolute; top:14px; left:14px;
+    background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.22);
+    color:#f0d070; font-size:13px; font-weight:700; letter-spacing:.3px;
+    padding:7px 14px; border-radius:20px; text-decoration:none;
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    transition:background .15s, transform .15s;
+    z-index:10;
+  }
+  #coverHubBtn:hover{ background:rgba(255,255,255,0.22); transform:scale(1.05); }
   #cover{
     width:min(86vw, 480px); height:min(70vh, 640px);
     background:
@@ -958,6 +968,7 @@
 <!-- ============== COVER ============== -->
 <input type="file" id="coverFileInput" accept="image/*" style="display:none">
 <div id="coverStage">
+  <a id="coverHubBtn" href="https://claudeaispam-maker.github.io/binder-hub/">🗂 Hub</a>
   <div id="cover">
     <img id="coverImg" src="" alt="cover">
     <div id="coverBtns">
