@@ -78,15 +78,15 @@
     perspective: 2000px; z-index: 50;
   }
   #coverHubBtn{
-    position:absolute; top:14px; left:14px;
-    background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.22);
-    color:#f0d070; font-size:13px; font-weight:700; letter-spacing:.3px;
-    padding:7px 14px; border-radius:20px; text-decoration:none;
-    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
-    transition:background .15s, transform .15s;
-    z-index:10;
+    position:absolute; top:16px; left:16px;
+    background:#ffffff; border:none;
+    color:#1a1208; font-size:14px; font-weight:800; letter-spacing:.3px;
+    padding:9px 18px; border-radius:22px; text-decoration:none;
+    box-shadow:0 4px 16px rgba(0,0,0,0.5);
+    transition:background .15s, transform .15s, box-shadow .15s;
+    z-index:10; display:inline-flex; align-items:center; gap:5px;
   }
-  #coverHubBtn:hover{ background:rgba(255,255,255,0.22); transform:scale(1.05); }
+  #coverHubBtn:hover{ background:#f5f5f5; transform:scale(1.05); box-shadow:0 6px 20px rgba(0,0,0,0.6); }
   #cover{
     width:min(86vw, 480px); height:min(70vh, 640px);
     background:
