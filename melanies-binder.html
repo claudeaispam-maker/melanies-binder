@@ -1238,6 +1238,54 @@ function exportBinderJSON(){
   toast('Binder exported as JSON.');
 }
 
+/* ── Hub Sync ─────────────────────────────────────────────── */
+const HUB_TOKEN_KEY = 'melanie_hub_gh_token';
+
+async function compressForHub(dataUrl) {
+  if (!dataUrl) return null;
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 500;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.72));
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+async function syncToHub() {
+  const token = localStorage.getItem(HUB_TOKEN_KEY);
+  if (!token) { toast('Add your GitHub token in Settings → Hub Sync first.'); return; }
+  const cards = (binderState.pages || []).flat().filter(s => s && s.name);
+  const coverImage = await compressForHub(binderState.coverImage);
+  const snapshot = {
+    _snapshot: true,
+    cardCount: cards.length,
+    totalValue: parseFloat(cards.reduce((a, c) => a + (Number(c.price) || 0), 0).toFixed(2)),
+    lastUpdated: new Date().toISOString(),
+    coverImage,
+  };
+  const owner = 'claudeaispam-maker', repo = 'melanies-binder', branch = 'master', path = 'hub-snapshot.json';
+  const headers = { Authorization: `token ${token}`, 'Content-Type': 'application/json', Accept: 'application/vnd.github.v3+json' };
+  let sha;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, { headers });
+    if (r.ok) sha = (await r.json()).sha;
+  } catch {}
+  const content = btoa(unescape(encodeURIComponent(JSON.stringify(snapshot, null, 2))));
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+    method: 'PUT', headers,
+    body: JSON.stringify({ message: `Hub snapshot — ${new Date().toLocaleString()}`, content, branch, ...(sha ? { sha } : {}) }),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || res.status); }
+}
+
 function buildExportHTML(){
   const date  = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
   const cards = [];
@@ -5649,6 +5697,14 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
       </p>
       <button class="primary" id="generateShareBtn" style="width:100%;">Generate Share Link</button>
     </div>
+    <div style="background:#fff8e6;border:1px solid #f0c040;border-radius:8px;padding:12px;margin-bottom:14px;">
+      <div style="font-weight:700;color:#7a5c00;margin-bottom:4px;">🔄 Hub Sync</div>
+      <p style="font-size:12px;color:#555;margin:0 0 8px 0;">Push a permanent snapshot to the Binder Hub — visible from any device. Only your GitHub token can trigger a sync.</p>
+      <input type="password" id="ghTokenInput" placeholder="GitHub personal access token" autocomplete="off" style="margin-bottom:6px;">
+      <p style="font-size:11px;color:#888;margin:0 0 8px 0;">Create at <strong>github.com/settings/tokens</strong> → Fine-grained → Contents: Read &amp; Write on <em>melanies-binder</em> only. Stored on this device only.</p>
+      <button class="primary" id="syncToHubBtn" style="width:100%;">📤 Sync to Hub</button>
+      <div id="syncStatus" style="font-size:12px;margin-top:6px;min-height:18px;"></div>
+    </div>
     <div style="background:#f0fff4;border:1px solid #b2dfbc;border-radius:8px;padding:12px;margin-bottom:14px;">
       <div style="font-weight:700;color:#1e6b3a;margin-bottom:4px;">💾 Save / Export Binder</div>
       <p style="font-size:12px;color:#555;margin:0 0 10px 0;">
@@ -5693,6 +5749,20 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
     <div class="closeRow"><button class="secondary" id="closeSettingsBtn">Close</button></div>
   `);
   document.getElementById('revealCooldownSelect').value = binderState.revealCooldown || 'none';
+  document.getElementById('ghTokenInput').value = localStorage.getItem(HUB_TOKEN_KEY) || '';
+  document.getElementById('syncToHubBtn').addEventListener('click', async () => {
+    const token = document.getElementById('ghTokenInput').value.trim();
+    const status = document.getElementById('syncStatus');
+    if (!token) { status.innerHTML = '<span style="color:#c55;">⚠ Paste your GitHub token first.</span>'; return; }
+    localStorage.setItem(HUB_TOKEN_KEY, token);
+    status.innerHTML = '<span style="color:#888;">Syncing…</span>';
+    try {
+      await syncToHub();
+      status.innerHTML = '<span style="color:green;">✓ Synced! Hub updated.</span>';
+    } catch(e) {
+      status.innerHTML = `<span style="color:#c55;">✗ ${e.message}</span>`;
+    }
+  });
   document.getElementById('generateShareBtn').addEventListener('click', openShareOptions);
   document.getElementById('exportJsonBtn').addEventListener('click', exportBinderJSON);
   document.getElementById('exportHtmlBtn').addEventListener('click', exportBinderHTML);
